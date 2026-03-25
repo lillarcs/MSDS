@@ -44,46 +44,6 @@ A collection of WebXR experiments for Meta Quest 2 & 3, exploring proprioception
 2. Press **Enter VR**
 3. Switch to hand tracking or use controllers depending on the experiment
 
-## Development with Claude Code
-
-This project was built entirely using [Claude Code](https://claude.com/claude-code), Anthropic's CLI tool for AI-assisted software engineering.
-
-### Setup
-
-1. Install Claude Code:
-   ```bash
-   npm install -g @anthropic-ai/claude-code
-   ```
-
-2. Navigate to the project folder:
-   ```bash
-   cd /path/to/MSDS
-   ```
-
-3. Start Claude Code:
-   ```bash
-   claude
-   ```
-
-4. Ask Claude to create or modify experiments. Example prompts:
-   - *"Create a new WebXR hand tracking experiment that..."*
-   - *"Add haptic feedback when touching shapes"*
-   - *"Make the speed limit adjustable with the joystick"*
-
-### Workflow
-
-- Each experiment is a **single self-contained HTML file** — no bundler, no dependencies to install
-- Claude Code reads, edits, and creates files directly in this folder
-- Test locally by serving over HTTPS (required for WebXR):
-  ```bash
-  npx serve .
-  ```
-  Then open `https://localhost:3000` on your Quest browser (or use a tunnel like ngrok for remote access)
-- Push changes to GitHub to update the live Pages site:
-  ```bash
-  git add *.html && git commit -m "description" && git push
-  ```
-
 ---
 
 ## WebXR Development Kick Start
