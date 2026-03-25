@@ -186,7 +186,7 @@ A step-by-step guide to get you from zero to building and deploying your own Web
 
 - A **Meta Quest 2 or 3** headset
 - A **GitHub account** — sign up free at [github.com](https://github.com)
-- An **Anthropic account** — sign up at [console.anthropic.com](https://console.anthropic.com) (you'll need an API key or a Claude Max/Pro subscription)
+- An **Anthropic API key** — provided by the instructor during class (no personal subscription needed)
 
 ### Step 1: Install tools
 
@@ -243,7 +243,40 @@ Follow the prompts — choose **GitHub.com**, **HTTPS**, and authenticate via br
 npm install -g @anthropic-ai/claude-code
 ```
 
-On first run, Claude Code will ask you to log in with your Anthropic account.
+#### Set the API key
+
+The instructor will provide an Anthropic API key during class. Set it as an environment variable **before** running Claude Code:
+
+**macOS / Linux (Terminal):**
+```bash
+export ANTHROPIC_API_KEY=sk-ant-xxxxx
+```
+
+To make it permanent, add the line above to your `~/.zshrc` (macOS) or `~/.bashrc` (Linux):
+```bash
+echo 'export ANTHROPIC_API_KEY=sk-ant-xxxxx' >> ~/.zshrc
+source ~/.zshrc
+```
+
+**Windows (Command Prompt):**
+```cmd
+set ANTHROPIC_API_KEY=sk-ant-xxxxx
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-xxxxx"
+```
+
+To make it permanent on Windows, go to **Settings → System → About → Advanced system settings → Environment Variables** and add `ANTHROPIC_API_KEY` with the key as the value.
+
+> **Replace `sk-ant-xxxxx` with the actual key provided in class.** Do not share this key or commit it to Git.
+
+Now start Claude Code:
+```bash
+claude
+```
+It will use the API key automatically — no login or subscription needed.
 
 > **From here on, you can let Claude do most of these steps for you.** Just start Claude Code (`claude`) and tell it:
 > *"Read the kick start guide at https://github.com/toonhuysmans/MSDS and help me set everything up."*
