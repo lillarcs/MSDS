@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebXR Soothing Shapes</title>
+<style>
+  body { margin: 0; background: #0a0a1a; color: #fff; font-family: sans-serif; overflow: hidden; }
+  #enterVR {
+    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+    padding: 16px 32px; font-size: 18px; background: #44aaff; color: #000;
+    border: none; border-radius: 8px; cursor: pointer; z-index: 10;
+  }
+  #enterVR:disabled { opacity: 0.4; cursor: default; }
+  #info { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); text-align: center; opacity: 0.7; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="info">Soothing Shapes — Touch to burst</div>
+<button id="enterVR" disabled>Enter VR</button>
+
+<script type="module">
+import * as THREE from 'three';
+import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+// ============================================================
+// CONFIG
+// ============================================================
+const TOUCH_DIST = 0.06;          // m — fingertip to shape center for touch
+let spawnInterval = 1.2;          // seconds between spawns (joystick adjustable)
+const SPAWN_MIN = 0.15;           // fastest spawn rate
+const SPAWN_MAX = 4.0;            // slowest spawn rate
+const SPAWN_STEP = 0.02;          // adjustment per frame per unit deflection
+let maxShapes = 5;                // max simultaneous shapes (joystick adjustable)
+const MAX_SHAPES_MIN = 1;
+const MAX_SHAPES_MAX = 20;
+const MAX_SHAPES_STEP = 0.05;
+let maxShapesFloat = 5;           // float accumulator for smooth adjustment
+const DEADZONE = 0.1;
+const PARTICLE_COUNT = 60;        // confetti per burst
+const PARTICLE_LIFE = 2.0;       // seconds
+const PARTICLE_SPEED = 0.8;      // m/s initial burst speed
+const PARTICLE_GRAVITY = 0.4;    // m/s² downward
+const SHAPE_MIN_DIST = 0.3;      // m from head
+const SHAPE_MAX_DIST = 0.7;
+const SHAPE_LATERAL = 0.4;
+const SHAPE_HEIGHT_MIN = 0.7;
+const SHAPE_HEIGHT_MAX = 1.5;
+// ============================================================
+
+// --- Palette ---
+const PALETTE = [
+  0xff6b9d, 0xc44dff, 0x44ddff, 0x44ffaa, 0xffdd44,
+  0xff8844, 0xff44aa, 0x88ff44, 0x44aaff, 0xffaadd
+];
+
+function randColor() { return PALETTE[Math.floor(Math.random() * PALETTE.length)]; }
+function rand(min, max) { return min + Math.random() * (max - min); }
+
+// --- Scene ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a1a);
+scene.fog = new THREE.FogExp2(0x0a0a1a, 0.3);
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+camera.position.set(0, 1.6, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.xr.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.appendChild(renderer.domElement);
+
+// Soft lighting
+scene.add(new THREE.AmbientLight(0x8888cc, 0.4));
+const dirLight = new THREE.DirectionalLight(0xffeedd, 0.6);
+dirLight.position.set(1, 4, 2);
+scene.add(dirLight);
+
+// Subtle point lights for warmth
+const pl1 = new THREE.PointLight(0xff6688, 0.5, 8);
+pl1.position.set(-2, 2, -1);
+scene.add(pl1);
+const pl2 = new THREE.PointLight(0x6688ff, 0.5, 8);
+pl2.position.set(2, 2, 1);
+scene.add(pl2);
+
+// Floor: soft grid
+const grid = new THREE.GridHelper(30, 60, 0x222244, 0x111133);
+grid.material.transparent = true;
+grid.material.opacity = 0.4;
+scene.add(grid);
+
+// --- Audio ---
+let audioCtx = null;
+let audioReady = false;
+
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  src.start();
+  audioReady = true;
+  audioCtx.resume();
+}
+
+function playChime(baseFreq) {
+  if (!audioReady || !audioCtx) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+
+  // Soft bell-like chime: sine + quiet harmonics with slow decay
+  const t = audioCtx.currentTime;
+  const dur = 1.5;
+
+  [1, 2, 3, 5].forEach((harmonic, i) => {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = baseFreq * harmonic;
+    const gain = audioCtx.createGain();
+    const vol = [0.15, 0.06, 0.03, 0.015][i];
+    gain.gain.setValueAtTime(vol, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + dur);
+  });
+}
+
+// Chime notes: pentatonic scale for always-pleasant sounds
+const CHIME_NOTES = [261.6, 293.7, 329.6, 392.0, 440.0, 523.3, 587.3];
+let chimeIdx = 0;
+
+// --- Hand tracking ---
+const handModelFactory = new XRHandModelFactory();
+
+const hand0 = renderer.xr.getHand(0);
+hand0.add(handModelFactory.createHandModel(hand0, 'mesh'));
+scene.add(hand0);
+
+const hand1 = renderer.xr.getHand(1);
+hand1.add(handModelFactory.createHandModel(hand1, 'mesh'));
+scene.add(hand1);
+
+// Track fingertip positions for both hands (all 5 tips + both hands = 10 points)
+const FINGER_TIPS = [
+  'thumb-tip', 'index-finger-tip', 'middle-finger-tip', 'ring-finger-tip', 'pinky-finger-tip'
+];
+const fingertipPositions = []; // filled each frame
+
+// --- Shape geometries ---
+const shapeGeos = [
+  new THREE.IcosahedronGeometry(0.05, 0),
+  new THREE.OctahedronGeometry(0.05, 0),
+  new THREE.TetrahedronGeometry(0.06, 0),
+  new THREE.DodecahedronGeometry(0.05, 0),
+  new THREE.TorusGeometry(0.04, 0.015, 8, 16),
+  new THREE.SphereGeometry(0.05, 12, 8),
+  new THREE.BoxGeometry(0.08, 0.08, 0.08),
+  new THREE.ConeGeometry(0.04, 0.08, 8),
+  new THREE.TorusKnotGeometry(0.035, 0.012, 32, 8),
+];
+
+// --- Active shapes ---
+const activeShapes = [];
+let spawnTimer = 0;
+
+function spawnShape() {
+  const xrCam = renderer.xr.getCamera();
+  const headPos = new THREE.Vector3().setFromMatrixPosition(xrCam.matrixWorld);
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(xrCam.quaternion);
+  forward.y = 0;
+  forward.normalize();
+  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).negate().normalize();
+
+  const depth = rand(SHAPE_MIN_DIST, SHAPE_MAX_DIST);
+  const lateral = rand(-SHAPE_LATERAL, SHAPE_LATERAL);
+  const height = rand(SHAPE_HEIGHT_MIN, SHAPE_HEIGHT_MAX);
+
+  const geo = shapeGeos[Math.floor(Math.random() * shapeGeos.length)];
+  const color = randColor();
+  const mat = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 0.3,
+    roughness: 0.3,
+    metalness: 0.1,
+    transparent: true,
+    opacity: 0.9
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(headPos)
+    .addScaledVector(forward, depth)
+    .addScaledVector(right, lateral);
+  mesh.position.y = height;
+  mesh.userData.color = color;
+  mesh.userData.phase = rand(0, Math.PI * 2);
+  mesh.userData.rotSpeedY = rand(0.5, 1.2);
+  mesh.userData.rotSpeedX = rand(0.1, 0.5);
+
+  scene.add(mesh);
+  activeShapes.push(mesh);
+}
+
+// --- Particle system (confetti + streamers) ---
+const CONFETTI_GEOS = [
+  new THREE.PlaneGeometry(0.015, 0.04),    // ribbon
+  new THREE.PlaneGeometry(0.02, 0.02),     // square confetti
+  new THREE.CircleGeometry(0.01, 6),       // circle confetti
+];
+
+const STREAMER_COUNT = 12;       // streamers per burst
+const STREAMER_TRAIL_LEN = 24;   // points in each streamer trail
+const STREAMER_LIFE = 2.5;       // seconds
+
+const particles = [];  // { mesh, vel, life, maxLife, rotSpeed, type:'confetti' }
+const streamers = [];  // { line, positions, vel, life, maxLife, material, type:'streamer' }
+
+function burstAt(position, baseColor) {
+  // --- Confetti ---
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const geo = CONFETTI_GEOS[Math.floor(Math.random() * CONFETTI_GEOS.length)];
+    const useBase = Math.random() < 0.6;
+    const col = useBase ? baseColor : randColor();
+    const mat = new THREE.MeshBasicMaterial({
+      color: col,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 1.0,
+      depthWrite: false
+    });
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(position);
+    mesh.rotation.set(rand(0, Math.PI * 2), rand(0, Math.PI * 2), rand(0, Math.PI * 2));
+
+    const dir = new THREE.Vector3(
+      rand(-1, 1), rand(0.3, 1.5), rand(-1, 1)
+    ).normalize();
+    const speed = PARTICLE_SPEED * rand(0.4, 1.0);
+
+    scene.add(mesh);
+    particles.push({
+      mesh,
+      vel: dir.multiplyScalar(speed),
+      life: 0,
+      maxLife: PARTICLE_LIFE * rand(0.6, 1.0),
+      rotSpeed: new THREE.Vector3(rand(-5, 5), rand(-5, 5), rand(-5, 5))
+    });
+  }
+
+  // --- Streamers (trailing lines) ---
+  for (let i = 0; i < STREAMER_COUNT; i++) {
+    const col = Math.random() < 0.5 ? baseColor : randColor();
+
+    // Each streamer starts offset 3-6cm from center in a random direction
+    const dir = new THREE.Vector3(
+      rand(-1, 1), rand(0.5, 1.8), rand(-1, 1)
+    ).normalize();
+    const startOffset = rand(0.03, 0.06);
+    const startPos = position.clone().addScaledVector(dir, startOffset);
+
+    // All trail points start at the offset position
+    const points = [];
+    for (let j = 0; j < STREAMER_TRAIL_LEN; j++) {
+      points.push(startPos.clone());
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(points);
+    const mat = new THREE.LineBasicMaterial({
+      color: col,
+      transparent: true,
+      opacity: 1.0,
+      linewidth: 1,
+      depthWrite: false
+    });
+    const line = new THREE.Line(geo, mat);
+    scene.add(line);
+
+    const speed = PARTICLE_SPEED * rand(0.5, 1.2);
+
+    streamers.push({
+      line,
+      positions: points,
+      vel: dir.multiplyScalar(speed),
+      life: 0,
+      maxLife: STREAMER_LIFE * rand(0.7, 1.0),
+      material: mat,
+      headPos: startPos.clone()
+    });
+  }
+}
+
+function updateParticles(dt) {
+  // --- Confetti ---
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life += dt;
+
+    if (p.life >= p.maxLife) {
+      scene.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+      particles.splice(i, 1);
+      continue;
+    }
+
+    p.vel.y -= PARTICLE_GRAVITY * dt;
+    p.mesh.position.addScaledVector(p.vel, dt);
+
+    p.mesh.rotation.x += p.rotSpeed.x * dt;
+    p.mesh.rotation.y += p.rotSpeed.y * dt;
+    p.mesh.rotation.z += p.rotSpeed.z * dt;
+
+    p.vel.multiplyScalar(1 - 0.5 * dt);
+
+    const t = p.life / p.maxLife;
+    if (t > 0.6) {
+      p.mesh.material.opacity = 1.0 - (t - 0.6) / 0.4;
+    }
+    p.mesh.scale.setScalar(1.0 - t * 0.3);
+  }
+
+  // --- Streamers ---
+  for (let i = streamers.length - 1; i >= 0; i--) {
+    const s = streamers[i];
+    s.life += dt;
+
+    if (s.life >= s.maxLife) {
+      scene.remove(s.line);
+      s.line.geometry.dispose();
+      s.material.dispose();
+      streamers.splice(i, 1);
+      continue;
+    }
+
+    // Move head
+    s.vel.y -= PARTICLE_GRAVITY * 0.6 * dt; // lighter gravity for floaty feel
+    s.vel.multiplyScalar(1 - 0.3 * dt);     // less drag = longer trails
+    s.headPos.addScaledVector(s.vel, dt);
+
+    // Add a gentle sinusoidal wiggle
+    const wiggle = Math.sin(s.life * 8 + i) * 0.002;
+    s.headPos.x += wiggle;
+    s.headPos.z += wiggle * 0.7;
+
+    // Shift trail: move each point toward the next, head gets new position
+    for (let j = s.positions.length - 1; j > 0; j--) {
+      s.positions[j].copy(s.positions[j - 1]);
+    }
+    s.positions[0].copy(s.headPos);
+
+    // Update geometry
+    const posAttr = s.line.geometry.getAttribute('position');
+    for (let j = 0; j < s.positions.length; j++) {
+      posAttr.setXYZ(j, s.positions[j].x, s.positions[j].y, s.positions[j].z);
+    }
+    posAttr.needsUpdate = true;
+
+    // Fade out
+    const t = s.life / s.maxLife;
+    if (t > 0.5) {
+      s.material.opacity = 1.0 - (t - 0.5) / 0.5;
+    }
+  }
+}
+
+// --- Controllers ---
+const controller0 = renderer.xr.getController(0);
+scene.add(controller0);
+const controller1 = renderer.xr.getController(1);
+scene.add(controller1);
+
+// Controller grip models (visible when using controllers)
+const controllerModelFactory = new XRControllerModelFactory();
+const grip0 = renderer.xr.getControllerGrip(0);
+grip0.add(controllerModelFactory.createControllerModel(grip0));
+scene.add(grip0);
+const grip1 = renderer.xr.getControllerGrip(1);
+grip1.add(controllerModelFactory.createControllerModel(grip1));
+scene.add(grip1);
+
+// --- Score HUD ---
+let score = 0;
+const hudCanvas = document.createElement('canvas');
+hudCanvas.width = 380;
+hudCanvas.height = 140;
+const hudCtx = hudCanvas.getContext('2d');
+const hudTexture = new THREE.CanvasTexture(hudCanvas);
+
+const hudMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.32, 0.12),
+  new THREE.MeshBasicMaterial({ map: hudTexture, transparent: true, opacity: 0.85 })
+);
+hudMesh.position.set(0, 1.7, -1.0);
+scene.add(hudMesh);
+
+function drawHUD() {
+  const ctx = hudCtx;
+  ctx.clearRect(0, 0, 380, 140);
+  ctx.fillStyle = 'rgba(10,10,30,0.7)';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, 380, 140, 12);
+  ctx.fill();
+
+  ctx.fillStyle = '#ffdd88';
+  ctx.font = 'bold 32px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${score}`, 190, 35);
+
+  ctx.fillStyle = '#888';
+  ctx.font = '14px sans-serif';
+  ctx.fillText('shapes touched', 190, 55);
+
+  // Controls info
+  ctx.fillStyle = '#667';
+  ctx.font = '13px monospace';
+  ctx.fillText(`Rate: ${spawnInterval.toFixed(1)}s  |  Max: ${maxShapes}  |  Active: ${activeShapes.length}`, 190, 82);
+
+  ctx.fillStyle = '#556';
+  ctx.font = '11px sans-serif';
+  ctx.fillText('L stick ↕ spawn rate  |  R stick ↕ density', 190, 102);
+
+  hudTexture.needsUpdate = true;
+}
+drawHUD();
+
+// --- WebXR ---
+const enterBtn = document.getElementById('enterVR');
+
+if (navigator.xr) {
+  navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+    if (supported) {
+      enterBtn.disabled = false;
+      enterBtn.textContent = 'Enter VR';
+    } else {
+      enterBtn.textContent = 'VR Not Supported';
+    }
+  });
+} else {
+  enterBtn.textContent = 'WebXR Not Available';
+}
+
+let xrSession = null;
+let refSpace = null;
+
+enterBtn.addEventListener('click', async () => {
+  initAudio();
+  if (xrSession) return;
+  try {
+    const session = await navigator.xr.requestSession('immersive-vr', {
+      optionalFeatures: ['hand-tracking', 'local-floor', 'bounded-floor']
+    });
+    xrSession = session;
+    renderer.xr.setSession(session);
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    session.addEventListener('end', () => { xrSession = null; });
+    enterBtn.textContent = 'In VR';
+  } catch (e) {
+    console.error('Failed to start XR session:', e);
+  }
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- Render loop ---
+let prevTime = 0;
+
+renderer.setAnimationLoop((timestamp, frame) => {
+  const now = performance.now();
+  const dt = prevTime > 0 ? Math.min((now - prevTime) / 1000, 0.1) : 0.016;
+  prevTime = now;
+
+  if (frame && renderer.xr.isPresenting) {
+    const session = renderer.xr.getSession();
+    refSpace = renderer.xr.getReferenceSpace();
+
+    // --- Joystick controls ---
+    for (const source of session.inputSources) {
+      const gp = source.gamepad;
+      if (!gp || gp.axes.length < 4) continue;
+      if (source.handedness === 'left') {
+        // Left stick Y: spawn rate (up = faster, down = slower)
+        const axisY = gp.axes[3];
+        if (Math.abs(axisY) > DEADZONE) {
+          spawnInterval += axisY * SPAWN_STEP;
+          spawnInterval = Math.max(SPAWN_MIN, Math.min(SPAWN_MAX, spawnInterval));
+        }
+      } else if (source.handedness === 'right') {
+        // Right stick Y: max shapes (up = more, down = fewer)
+        const axisY = gp.axes[3];
+        if (Math.abs(axisY) > DEADZONE) {
+          maxShapesFloat -= axisY * MAX_SHAPES_STEP;
+          maxShapesFloat = Math.max(MAX_SHAPES_MIN, Math.min(MAX_SHAPES_MAX, maxShapesFloat));
+          maxShapes = Math.round(maxShapesFloat);
+        }
+      }
+    }
+
+    // Collect touch points from hands (fingertips) and controllers (grip)
+    // Each entry: { pos, source } so we can trigger haptics on the source that touched
+    fingertipPositions.length = 0;
+    for (const source of session.inputSources) {
+      if (source.hand) {
+        for (const tipName of FINGER_TIPS) {
+          const jointSpace = source.hand.get(tipName);
+          if (!jointSpace) continue;
+          const pose = frame.getJointPose(jointSpace, refSpace);
+          if (pose) {
+            fingertipPositions.push({
+              pos: new THREE.Vector3(
+                pose.transform.position.x,
+                pose.transform.position.y,
+                pose.transform.position.z
+              ),
+              source
+            });
+          }
+        }
+      } else if (source.gripSpace) {
+        const pose = frame.getPose(source.gripSpace, refSpace);
+        if (pose) {
+          fingertipPositions.push({
+            pos: new THREE.Vector3(
+              pose.transform.position.x,
+              pose.transform.position.y,
+              pose.transform.position.z
+            ),
+            source
+          });
+        }
+      }
+    }
+
+    // --- Spawn shapes on timer ---
+    spawnTimer += dt;
+    if (spawnTimer >= spawnInterval && activeShapes.length < maxShapes) {
+      spawnShape();
+      spawnTimer = 0;
+    }
+    // Also spawn immediately if we have zero shapes
+    if (activeShapes.length === 0) {
+      spawnShape();
+      spawnTimer = 0;
+    }
+
+    // --- Animate + check touch on all active shapes ---
+    for (let i = activeShapes.length - 1; i >= 0; i--) {
+      const shape = activeShapes[i];
+
+      // Gentle pulse + rotation
+      shape.userData.phase += dt * 2.5;
+      const pulse = 1.0 + 0.12 * Math.sin(shape.userData.phase);
+      shape.scale.setScalar(pulse);
+      shape.rotation.y += dt * shape.userData.rotSpeedY;
+      shape.rotation.x += dt * shape.userData.rotSpeedX;
+
+      const emI = 0.2 + 0.15 * Math.sin(shape.userData.phase * 1.5);
+      shape.material.emissiveIntensity = emI;
+
+      // Check touch from any fingertip / controller
+      let touchedSource = null;
+      for (const tp of fingertipPositions) {
+        if (tp.pos.distanceTo(shape.position) < TOUCH_DIST) {
+          touchedSource = tp.source;
+          break;
+        }
+      }
+
+      if (touchedSource) {
+        const pos = shape.position.clone();
+        const col = shape.userData.color;
+
+        burstAt(pos, col);
+        playChime(CHIME_NOTES[chimeIdx % CHIME_NOTES.length]);
+        chimeIdx++;
+        score++;
+
+        // Haptic buzz on the controller that touched
+        const gp = touchedSource.gamepad;
+        if (gp && gp.hapticActuators && gp.hapticActuators.length > 0) {
+          gp.hapticActuators[0].pulse(0.6, 80);
+        }
+        // Also try vibrationActuator (newer API)
+        if (gp && gp.vibrationActuator) {
+          gp.vibrationActuator.playEffect('dual-rumble', {
+            duration: 80,
+            strongMagnitude: 0.4,
+            weakMagnitude: 0.6
+          }).catch(() => {});
+        }
+
+        scene.remove(shape);
+        shape.geometry.dispose();
+        shape.material.dispose();
+        activeShapes.splice(i, 1);
+      }
+    }
+
+    drawHUD();
+  }
+
+  updateParticles(dt);
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

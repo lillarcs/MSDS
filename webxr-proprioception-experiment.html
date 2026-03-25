@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebXR Proprioception Experiment</title>
+<style>
+  body { margin: 0; background: #111; color: #fff; font-family: sans-serif; overflow: hidden; }
+  #enterVR {
+    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+    padding: 16px 32px; font-size: 18px; background: #44aaff; color: #000;
+    border: none; border-radius: 8px; cursor: pointer; z-index: 10;
+  }
+  #enterVR:disabled { opacity: 0.4; cursor: default; }
+  #info { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); text-align: center; opacity: 0.7; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="info">WebXR Proprioception Experiment — Meta Quest 3</div>
+<button id="enterVR" disabled>Enter VR</button>
+
+<script type="module">
+import * as THREE from 'three';
+import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
+
+// ============================================================
+// EXPERIMENT CONFIGURATION — edit these values
+// ============================================================
+const TRIALS_PER_BLOCK = 10;
+const NUM_BLOCKS = 10;
+const OFFSET_MAX = 0.15; // ±15cm
+
+// Generate 10 blocks with random offsets within ±15cm (fixed per block)
+const BLOCK_OFFSETS = [];
+for (let i = 0; i < NUM_BLOCKS; i++) {
+  const ox = (Math.random() * 2 - 1) * OFFSET_MAX;
+  const oy = (Math.random() * 2 - 1) * OFFSET_MAX;
+  BLOCK_OFFSETS.push({
+    name: `Block ${i + 1}`,
+    x: Math.round(ox * 1000) / 1000,
+    y: Math.round(oy * 1000) / 1000
+  });
+}
+const CONTACT_THRESHOLD = 0.05; // m — fingertip-to-target distance for "touch"
+const TARGET_RADIUS = 0.05;     // m
+
+// Target spawn ranges (relative to head position)
+const TARGET_DEPTH_MIN = 0.3, TARGET_DEPTH_MAX = 0.7;   // forward
+const TARGET_LATERAL_MIN = -0.3, TARGET_LATERAL_MAX = 0.3; // left/right
+const TARGET_HEIGHT_MIN = 0.8, TARGET_HEIGHT_MAX = 1.4;   // world Y
+
+// ============================================================
+
+// --- Joint names in spec order (25 joints) ---
+const JOINT_NAMES = [
+  'wrist',
+  'thumb-metacarpal', 'thumb-phalanx-proximal', 'thumb-phalanx-distal', 'thumb-tip',
+  'index-finger-metacarpal', 'index-finger-phalanx-proximal', 'index-finger-phalanx-intermediate', 'index-finger-phalanx-distal', 'index-finger-tip',
+  'middle-finger-metacarpal', 'middle-finger-phalanx-proximal', 'middle-finger-phalanx-intermediate', 'middle-finger-phalanx-distal', 'middle-finger-tip',
+  'ring-finger-metacarpal', 'ring-finger-phalanx-proximal', 'ring-finger-phalanx-intermediate', 'ring-finger-phalanx-distal', 'ring-finger-tip',
+  'pinky-finger-metacarpal', 'pinky-finger-phalanx-proximal', 'pinky-finger-phalanx-intermediate', 'pinky-finger-phalanx-distal', 'pinky-finger-tip'
+];
+
+// --- Scene setup ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+camera.position.set(0, 1.6, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// Lighting
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(1, 3, 2);
+scene.add(dirLight);
+
+// Infinite grid floor
+const gridHelper = new THREE.GridHelper(50, 100, 0x444444, 0x222222);
+gridHelper.position.y = 0;
+scene.add(gridHelper);
+
+// --- Hand tracking setup ---
+const handModelFactory = new XRHandModelFactory();
+
+// Both hand slots — handedness resolved at runtime
+const hand0 = renderer.xr.getHand(0);
+const handModel0 = handModelFactory.createHandModel(hand0, 'mesh');
+hand0.add(handModel0);
+scene.add(hand0);
+
+const hand1 = renderer.xr.getHand(1);
+const handModel1 = handModelFactory.createHandModel(hand1, 'mesh');
+hand1.add(handModel1);
+scene.add(hand1);
+
+// Track which hand object is the right hand
+let rightHandObj = null;
+let realHandVisible = false;
+
+hand0.addEventListener('connected', (event) => {
+  if (event.data && event.data.handedness === 'right') rightHandObj = hand0;
+});
+hand1.addEventListener('connected', (event) => {
+  if (event.data && event.data.handedness === 'right') rightHandObj = hand1;
+});
+
+// --- Ghost right hand (mesh model, manually driven with offset) ---
+const ghostHand = new THREE.Group();
+ghostHand.joints = {};
+for (const name of JOINT_NAMES) {
+  const joint = new THREE.Group();
+  joint.jointName = name;
+  ghostHand.joints[name] = joint;
+  ghostHand.add(joint);
+}
+scene.add(ghostHand);
+
+const ghostModel = handModelFactory.createHandModel(ghostHand, 'mesh');
+ghostHand.add(ghostModel);
+
+hand0.addEventListener('connected', (event) => {
+  if (event.data && event.data.handedness === 'right') {
+    ghostHand.dispatchEvent({ type: 'connected', data: event.data });
+  }
+});
+hand1.addEventListener('connected', (event) => {
+  if (event.data && event.data.handedness === 'right') {
+    ghostHand.dispatchEvent({ type: 'connected', data: event.data });
+  }
+});
+hand0.addEventListener('disconnected', () => {
+  if (rightHandObj === hand0) ghostHand.dispatchEvent({ type: 'disconnected' });
+});
+hand1.addEventListener('disconnected', () => {
+  if (rightHandObj === hand1) ghostHand.dispatchEvent({ type: 'disconnected' });
+});
+
+ghostHand.visible = true;
+
+// --- Active offset (set per block) ---
+const offset = { x: 0.0, y: 0.0 };
+
+// --- Controllers (for ray interaction) ---
+const controller0 = renderer.xr.getController(0);
+scene.add(controller0);
+const controller1 = renderer.xr.getController(1);
+scene.add(controller1);
+
+function makeRayLine() {
+  const geo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -3)
+  ]);
+  const mat = new THREE.LineBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.5 });
+  return new THREE.Line(geo, mat);
+}
+const ray0 = makeRayLine();
+controller0.add(ray0);
+const ray1 = makeRayLine();
+controller1.add(ray1);
+
+// --- Target sphere ---
+const targetGeo = new THREE.SphereGeometry(TARGET_RADIUS, 24, 16);
+const targetMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x444444 });
+const targetMesh = new THREE.Mesh(targetGeo, targetMat);
+targetMesh.visible = false;
+scene.add(targetMesh);
+
+// --- Experiment state ---
+let expState = 'idle'; // idle | running | rest | done
+let currentBlock = 0;
+let currentTrial = 0;
+let trialStartTime = 0;
+let trialLocked = false; // prevent multi-fire on single touch
+const trialLog = [];
+let ghostIndexTipPos = new THREE.Vector3();
+let realIndexTipPos = new THREE.Vector3();
+
+// Measurement window: after first contact, track min distance for MEASURE_WINDOW_MS
+const MEASURE_WINDOW_MS = 300;
+let measuring = false;
+let measureStart = 0;
+let minGhostDist = Infinity;
+let minRealDist = Infinity;
+let bestGhostPos = new THREE.Vector3();
+let bestRealPos = new THREE.Vector3();
+
+function randRange(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+// Pre-generate 10 fixed target offsets (depth, lateral, height) — same locations every block
+const TARGET_POSITIONS = [];
+for (let i = 0; i < TRIALS_PER_BLOCK; i++) {
+  TARGET_POSITIONS.push({
+    depth: randRange(TARGET_DEPTH_MIN, TARGET_DEPTH_MAX),
+    lateral: randRange(TARGET_LATERAL_MIN, TARGET_LATERAL_MAX),
+    height: randRange(TARGET_HEIGHT_MIN, TARGET_HEIGHT_MAX)
+  });
+}
+
+function spawnTarget() {
+  const xrCamera = renderer.xr.getCamera();
+  const headPos = new THREE.Vector3();
+  headPos.setFromMatrixPosition(xrCamera.matrixWorld);
+
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(xrCamera.quaternion);
+  forward.y = 0;
+  forward.normalize();
+  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).negate().normalize();
+
+  const tp = TARGET_POSITIONS[currentTrial];
+  targetMesh.position.copy(headPos)
+    .addScaledVector(forward, tp.depth)
+    .addScaledVector(right, tp.lateral);
+  targetMesh.position.y = tp.height;
+  targetMesh.visible = true;
+  targetMat.color.set(0xffffff);
+  trialLocked = false;
+
+  trialStartTime = performance.now();
+}
+
+function startMeasureWindow() {
+  measuring = true;
+  measureStart = performance.now();
+  minGhostDist = Infinity;
+  minRealDist = Infinity;
+  bestGhostPos.copy(ghostIndexTipPos);
+  bestRealPos.copy(realIndexTipPos);
+  // Visual feedback: target turns yellow during measurement
+  targetMat.color.set(0xffcc44);
+}
+
+function updateMeasureWindow() {
+  const gDist = ghostIndexTipPos.distanceTo(targetMesh.position);
+  const rDist = realIndexTipPos.distanceTo(targetMesh.position);
+  if (gDist < minGhostDist) {
+    minGhostDist = gDist;
+    bestGhostPos.copy(ghostIndexTipPos);
+  }
+  if (rDist < minRealDist) {
+    minRealDist = rDist;
+    bestRealPos.copy(realIndexTipPos);
+  }
+
+  if (performance.now() - measureStart >= MEASURE_WINDOW_MS) {
+    measuring = false;
+    completeTrial();
+  }
+}
+
+function completeTrial() {
+  const rt = performance.now() - trialStartTime;
+  const t = targetMesh.position;
+  const blockCfg = BLOCK_OFFSETS[currentBlock];
+
+  trialLog.push({
+    timestamp: new Date().toISOString(),
+    block: blockCfg.name,
+    trial: currentTrial + 1,
+    offset_x: blockCfg.x.toFixed(4),
+    offset_y: blockCfg.y.toFixed(4),
+    target_x: t.x.toFixed(4),
+    target_y: t.y.toFixed(4),
+    target_z: t.z.toFixed(4),
+    ghost_fingertip_x: bestGhostPos.x.toFixed(4),
+    ghost_fingertip_y: bestGhostPos.y.toFixed(4),
+    ghost_fingertip_z: bestGhostPos.z.toFixed(4),
+    real_fingertip_x: bestRealPos.x.toFixed(4),
+    real_fingertip_y: bestRealPos.y.toFixed(4),
+    real_fingertip_z: bestRealPos.z.toFixed(4),
+    ghost_accuracy_m: minGhostDist.toFixed(4),
+    real_accuracy_m: minRealDist.toFixed(4),
+    rt_ms: rt.toFixed(1)
+  });
+
+  // Flash target green
+  targetMat.color.set(0x44ff44);
+
+  currentTrial++;
+  if (currentTrial >= TRIALS_PER_BLOCK) {
+    targetMesh.visible = false;
+    currentBlock++;
+    if (currentBlock >= BLOCK_OFFSETS.length) {
+      expState = 'done';
+      drawStatusPanel();
+    } else {
+      expState = 'rest';
+      drawStatusPanel();
+    }
+  } else {
+    setTimeout(() => spawnTarget(), 400);
+  }
+}
+
+function startNextBlock() {
+  currentTrial = 0;
+  const blockCfg = BLOCK_OFFSETS[currentBlock];
+  offset.x = blockCfg.x;
+  offset.y = blockCfg.y;
+  expState = 'running';
+  drawStatusPanel();
+  spawnTarget();
+}
+
+function downloadCSV() {
+  if (trialLog.length === 0) return;
+  const headers = Object.keys(trialLog[0]);
+  const rows = trialLog.map(r => headers.map(h => r[h]).join(','));
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `proprioception_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// --- Plot panel (floating, toggled on/off) ---
+const plotCanvas = document.createElement('canvas');
+plotCanvas.width = 800;
+plotCanvas.height = 800;
+const plotCtx = plotCanvas.getContext('2d');
+const plotTexture = new THREE.CanvasTexture(plotCanvas);
+
+const plotMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.9, 0.9),
+  new THREE.MeshBasicMaterial({ map: plotTexture, transparent: true, opacity: 0.95 })
+);
+plotMesh.position.set(0, 1.4, -0.8);
+plotMesh.visible = false;
+scene.add(plotMesh);
+
+function showPlots() {
+  if (trialLog.length === 0) return;
+
+  // Aggregate per block: mean offset magnitude, mean real_error, mean rt
+  const blockData = {};
+  for (const t of trialLog) {
+    if (!blockData[t.block]) blockData[t.block] = { ox: [], oy: [], err: [], rt: [] };
+    blockData[t.block].ox.push(parseFloat(t.offset_x));
+    blockData[t.block].oy.push(parseFloat(t.offset_y));
+    blockData[t.block].err.push(parseFloat(t.ghost_accuracy_m));
+    blockData[t.block].rt.push(parseFloat(t.rt_ms));
+  }
+
+  function std(arr, mean) {
+    if (arr.length < 2) return 0;
+    const ss = arr.reduce((s, v) => s + (v - mean) ** 2, 0);
+    return Math.sqrt(ss / (arr.length - 1));
+  }
+
+  const points = [];
+  for (const [name, d] of Object.entries(blockData)) {
+    const avgOx = d.ox.reduce((a, b) => a + b, 0) / d.ox.length;
+    const avgOy = d.oy.reduce((a, b) => a + b, 0) / d.oy.length;
+    const mag = Math.sqrt(avgOx * avgOx + avgOy * avgOy);
+    const avgErr = d.err.reduce((a, b) => a + b, 0) / d.err.length;
+    const avgRt = d.rt.reduce((a, b) => a + b, 0) / d.rt.length;
+    points.push({
+      name, mag,
+      err: avgErr, errStd: std(d.err, avgErr),
+      rt: avgRt, rtStd: std(d.rt, avgRt)
+    });
+  }
+  points.sort((a, b) => a.mag - b.mag);
+
+  const ctx = plotCtx;
+  ctx.clearRect(0, 0, 800, 800);
+  ctx.fillStyle = 'rgba(15,15,25,0.95)';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, 800, 800, 12);
+  ctx.fill();
+
+  const plotH = 340;
+
+  // --- Top row: per-block averages vs offset magnitude ---
+  // Top-left: Error vs Offset
+  drawScatter(ctx, points, 'mag', 'err',
+    30, 20, 340, plotH,
+    'Offset magnitude (m)', 'Min ghost-to-target dist (m)',
+    'Error vs Offset', '#ff6644', 'errStd');
+
+  // Top-right: RT vs Offset
+  drawScatter(ctx, points, 'mag', 'rt',
+    430, 20, 340, plotH,
+    'Offset magnitude (m)', 'Reaction time (ms)',
+    'RT vs Offset', '#44aaff', 'rtStd');
+
+  // --- Bottom row: within-block adaptation (trial number on x-axis) ---
+  // Collect all values per trial position across blocks
+  const trialErrVals = Array.from({ length: TRIALS_PER_BLOCK }, () => []);
+  const trialRTVals = Array.from({ length: TRIALS_PER_BLOCK }, () => []);
+  for (const t of trialLog) {
+    const idx = parseInt(t.trial) - 1;
+    if (idx >= 0 && idx < TRIALS_PER_BLOCK) {
+      trialErrVals[idx].push(parseFloat(t.ghost_accuracy_m));
+      trialRTVals[idx].push(parseFloat(t.rt_ms));
+    }
+  }
+  const adaptPts = [];
+  for (let i = 0; i < TRIALS_PER_BLOCK; i++) {
+    if (trialErrVals[i].length > 0) {
+      const avgErr = trialErrVals[i].reduce((a, b) => a + b, 0) / trialErrVals[i].length;
+      const avgRt = trialRTVals[i].reduce((a, b) => a + b, 0) / trialRTVals[i].length;
+      adaptPts.push({
+        trial: i + 1,
+        err: avgErr, errStd: std(trialErrVals[i], avgErr),
+        rt: avgRt, rtStd: std(trialRTVals[i], avgRt)
+      });
+    }
+  }
+
+  // Bottom-left: Error vs Trial (within-block adaptation)
+  drawScatter(ctx, adaptPts, 'trial', 'err',
+    30, 410, 340, plotH,
+    'Trial # within block', 'Min ghost-to-target dist (m)',
+    'Error Adaptation (within block)', '#ff6644', 'errStd');
+
+  // Bottom-right: RT vs Trial (within-block adaptation)
+  drawScatter(ctx, adaptPts, 'trial', 'rt',
+    430, 410, 340, plotH,
+    'Trial # within block', 'Reaction time (ms)',
+    'RT Adaptation (within block)', '#44aaff', 'rtStd');
+
+  plotTexture.needsUpdate = true;
+  plotMesh.visible = true;
+}
+
+function drawScatter(ctx, pts, xKey, yKey, ox, oy, w, h, xLabel, yLabel, title, color, stdKey) {
+  const margin = { l: 55, r: 15, t: 30, b: 40 };
+  const pw = w - margin.l - margin.r;
+  const ph = h - margin.t - margin.b;
+  const left = ox + margin.l;
+  const top = oy + margin.t;
+
+  const xVals = pts.map(p => p[xKey]);
+  const yVals = pts.map(p => p[yKey]);
+  const xIsInt = xKey === 'trial';
+  const xMin = xIsInt ? 1 : 0;
+  const xMax = xIsInt ? Math.max(...xVals) : (Math.max(...xVals) * 1.15 || 0.2);
+  const yMin = 0;
+  // Compute yMax from mean + 1 std so all whiskers fit inside
+  let yTopVal = Math.max(...yVals);
+  if (stdKey) {
+    for (const p of pts) {
+      const upper = p[yKey] + (p[stdKey] || 0);
+      if (upper > yTopVal) yTopVal = upper;
+    }
+  }
+  const yMax = yTopVal * 1.15 || 1;
+
+  // Title
+  ctx.fillStyle = '#ccc';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(title, left + pw / 2, oy + 18);
+
+  // Axes
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(left, top);
+  ctx.lineTo(left, top + ph);
+  ctx.lineTo(left + pw, top + ph);
+  ctx.stroke();
+
+  // Axis labels
+  ctx.fillStyle = '#999';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(xLabel, left + pw / 2, top + ph + 35);
+  ctx.save();
+  ctx.translate(ox + 14, top + ph / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText(yLabel, 0, 0);
+  ctx.restore();
+
+  // Tick labels
+  ctx.fillStyle = '#888';
+  ctx.font = '11px monospace';
+  const xTicks = xIsInt ? Math.min(xMax - xMin, 10) : 5;
+  const yTicks = 5;
+  for (let i = 0; i <= xTicks; i++) {
+    const v = xMin + (xMax - xMin) * i / xTicks;
+    const x = left + (v - xMin) / (xMax - xMin) * pw;
+    ctx.textAlign = 'center';
+    ctx.fillText(xIsInt ? Math.round(v).toString() : v.toFixed(2), x, top + ph + 16);
+    ctx.strokeStyle = '#333';
+    ctx.beginPath();
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, top + ph);
+    ctx.stroke();
+  }
+  for (let i = 0; i <= yTicks; i++) {
+    const v = yMin + (yMax - yMin) * i / yTicks;
+    const y = top + ph - (v - yMin) / (yMax - yMin) * ph;
+    ctx.textAlign = 'right';
+    ctx.fillText(yKey === 'rt' ? v.toFixed(0) : v.toFixed(3), left - 6, y + 4);
+    ctx.strokeStyle = '#333';
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(left + pw, y);
+    ctx.stroke();
+  }
+
+  // Whiskers (±1 std)
+  if (stdKey) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    const capW = 4;
+    for (const p of pts) {
+      const sd = p[stdKey] || 0;
+      if (sd === 0) continue;
+      const x = left + (p[xKey] - xMin) / (xMax - xMin) * pw;
+      const yMean = top + ph - (p[yKey] - yMin) / (yMax - yMin) * ph;
+      const yHi = top + ph - (Math.min(p[yKey] + sd, yMax) - yMin) / (yMax - yMin) * ph;
+      const yLo = top + ph - (Math.max(p[yKey] - sd, yMin) - yMin) / (yMax - yMin) * ph;
+      ctx.beginPath();
+      ctx.moveTo(x, yHi);
+      ctx.lineTo(x, yLo);
+      ctx.stroke();
+      // Caps
+      ctx.beginPath();
+      ctx.moveTo(x - capW, yHi);
+      ctx.lineTo(x + capW, yHi);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x - capW, yLo);
+      ctx.lineTo(x + capW, yLo);
+      ctx.stroke();
+    }
+    ctx.lineWidth = 1;
+  }
+
+  // Points
+  ctx.fillStyle = color;
+  for (const p of pts) {
+    const x = left + (p[xKey] - xMin) / (xMax - xMin) * pw;
+    const y = top + ph - (p[yKey] - yMin) / (yMax - yMin) * ph;
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Trend line (simple linear regression)
+  if (pts.length >= 2) {
+    const n = pts.length;
+    const sx = xVals.reduce((a, b) => a + b, 0);
+    const sy = yVals.reduce((a, b) => a + b, 0);
+    const sxy = xVals.reduce((a, v, i) => a + v * yVals[i], 0);
+    const sxx = xVals.reduce((a, v) => a + v * v, 0);
+    const denom = n * sxx - sx * sx;
+    if (Math.abs(denom) > 1e-10) {
+      const slope = (n * sxy - sx * sy) / denom;
+      const intercept = (sy - slope * sx) / n;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath();
+      const x0 = left;
+      const x1 = left + pw;
+      const yAt = (xv) => top + ph - ((slope * xv + intercept) - yMin) / (yMax - yMin) * ph;
+      ctx.moveTo(x0, yAt(xMin));
+      ctx.lineTo(x1, yAt(xMax));
+      ctx.stroke();
+      ctx.globalAlpha = 1.0;
+      ctx.lineWidth = 1;
+    }
+  }
+}
+
+// --- Status / control panel ---
+const panelCanvas = document.createElement('canvas');
+panelCanvas.width = 512;
+panelCanvas.height = 320;
+const panelCtx = panelCanvas.getContext('2d');
+const panelTexture = new THREE.CanvasTexture(panelCanvas);
+
+const panelMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.55, 0.35),
+  new THREE.MeshBasicMaterial({ map: panelTexture, transparent: true, opacity: 0.95 })
+);
+panelMesh.position.set(0, 1.1, -1.0);
+scene.add(panelMesh);
+
+function drawStatusPanel(hovered) {
+  const ctx = panelCtx;
+  ctx.clearRect(0, 0, 512, 320);
+  ctx.fillStyle = 'rgba(20,20,30,0.92)';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, 512, 320, 16);
+  ctx.fill();
+
+  ctx.fillStyle = '#aaa';
+  ctx.font = '22px sans-serif';
+  ctx.textAlign = 'center';
+
+  if (expState === 'idle') {
+    ctx.fillText('Proprioception Experiment', 256, 36);
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.fillText(`${BLOCK_OFFSETS.length} blocks x ${TRIALS_PER_BLOCK} trials`, 256, 65);
+
+    // Start button
+    ctx.fillStyle = hovered === 'start' ? '#66ff66' : '#44cc44';
+    ctx.beginPath();
+    ctx.roundRect(131, 90, 250, 70, 12);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 30px sans-serif';
+    ctx.fillText('Start Experiment', 256, 135);
+
+    // Real hand toggle
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.fillText('Real Right Hand:', 160, 200);
+    ctx.fillStyle = hovered === 'showreal' ? '#66ccff' : '#44aaff';
+    ctx.beginPath();
+    ctx.roundRect(30, 215, 210, 50, 10);
+    ctx.fill();
+    ctx.fillStyle = hovered === 'hidereal' ? '#ff6666' : '#ff4444';
+    ctx.beginPath();
+    ctx.roundRect(272, 215, 210, 50, 10);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText('Show Real', 135, 248);
+    ctx.fillText('Hide Real', 377, 248);
+    ctx.fillStyle = '#666';
+    ctx.font = '16px sans-serif';
+    ctx.fillText(realHandVisible ? 'Real: VISIBLE' : 'Real: HIDDEN', 256, 290);
+
+  } else if (expState === 'running') {
+    const blockCfg = BLOCK_OFFSETS[currentBlock];
+    ctx.fillText(`Block ${currentBlock + 1}/${BLOCK_OFFSETS.length}: ${blockCfg.name}`, 256, 36);
+    ctx.fillStyle = '#44aaff';
+    ctx.font = 'bold 36px monospace';
+    ctx.fillText(`Trial ${currentTrial + 1} / ${TRIALS_PER_BLOCK}`, 256, 90);
+    ctx.fillStyle = '#888';
+    ctx.font = '20px sans-serif';
+    ctx.fillText(`Offset: ${blockCfg.x.toFixed(2)}, ${blockCfg.y.toFixed(2)} m`, 256, 130);
+    ctx.fillText('Touch the white sphere with your right index finger', 256, 175);
+
+  } else if (expState === 'rest') {
+    ctx.fillText('Block complete! Take a short break.', 256, 40);
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.fillText(`Next: Block ${currentBlock + 1}/${BLOCK_OFFSETS.length} — ${BLOCK_OFFSETS[currentBlock].name}`, 256, 75);
+
+    // Continue button
+    ctx.fillStyle = hovered === 'continue' ? '#66ff66' : '#44cc44';
+    ctx.beginPath();
+    ctx.roundRect(131, 100, 250, 70, 12);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 30px sans-serif';
+    ctx.fillText('Continue', 256, 145);
+
+    // Real hand toggle during rest
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.fillText('Real Right Hand:', 160, 210);
+    ctx.fillStyle = hovered === 'showreal' ? '#66ccff' : '#44aaff';
+    ctx.beginPath();
+    ctx.roundRect(30, 225, 210, 50, 10);
+    ctx.fill();
+    ctx.fillStyle = hovered === 'hidereal' ? '#ff6666' : '#ff4444';
+    ctx.beginPath();
+    ctx.roundRect(272, 225, 210, 50, 10);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText('Show Real', 135, 258);
+    ctx.fillText('Hide Real', 377, 258);
+    ctx.fillStyle = '#666';
+    ctx.font = '16px sans-serif';
+    ctx.fillText(realHandVisible ? 'Real: VISIBLE' : 'Real: HIDDEN', 256, 300);
+
+  } else if (expState === 'done') {
+    ctx.fillText('Experiment Complete!', 256, 40);
+    ctx.fillStyle = '#888';
+    ctx.font = '18px sans-serif';
+    ctx.fillText(`${trialLog.length} trials recorded`, 256, 70);
+
+    // Download button
+    ctx.fillStyle = hovered === 'download' ? '#66ff66' : '#44cc44';
+    ctx.beginPath();
+    ctx.roundRect(20, 95, 230, 55, 12);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText('Download CSV', 135, 130);
+
+    // Show plots button
+    ctx.fillStyle = hovered === 'plots' ? '#66ccff' : '#44aaff';
+    ctx.beginPath();
+    ctx.roundRect(262, 95, 230, 55, 12);
+    ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.fillText('Show Plots', 377, 130);
+  }
+
+  panelTexture.needsUpdate = true;
+}
+drawStatusPanel(null);
+
+// --- HUD (block + trial + offset) ---
+const hudCanvas = document.createElement('canvas');
+hudCanvas.width = 480;
+hudCanvas.height = 160;
+const hudCtx = hudCanvas.getContext('2d');
+const hudTexture = new THREE.CanvasTexture(hudCanvas);
+
+const hudMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.4, 0.12),
+  new THREE.MeshBasicMaterial({ map: hudTexture, transparent: true, opacity: 0.9 })
+);
+hudMesh.position.set(0, 1.65, -1.2);
+scene.add(hudMesh);
+
+function drawHUD() {
+  const ctx = hudCtx;
+  ctx.clearRect(0, 0, 480, 160);
+  ctx.fillStyle = 'rgba(10,10,20,0.85)';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, 480, 160, 12);
+  ctx.fill();
+  ctx.fillStyle = '#44aaff';
+  ctx.font = 'bold 24px monospace';
+  ctx.textAlign = 'center';
+
+  if (expState === 'running') {
+    const blockCfg = BLOCK_OFFSETS[currentBlock];
+    ctx.fillText(`Block ${currentBlock + 1}: ${blockCfg.name}`, 240, 35);
+    ctx.fillText(`Trial ${currentTrial + 1} / ${TRIALS_PER_BLOCK}`, 240, 70);
+    ctx.fillStyle = '#888';
+    ctx.font = '20px monospace';
+    ctx.fillText(`Lateral: ${offset.x >= 0 ? '+' : ''}${offset.x.toFixed(3)} m`, 240, 105);
+    ctx.fillText(`Vertical: ${offset.y >= 0 ? '+' : ''}${offset.y.toFixed(3)} m`, 240, 135);
+  } else if (expState === 'idle') {
+    ctx.fillText('Ready — press Start', 240, 55);
+    ctx.fillStyle = '#888';
+    ctx.font = '20px monospace';
+    ctx.fillText('Put on headset, use hand tracking', 240, 100);
+  } else if (expState === 'rest') {
+    ctx.fillText('Rest break', 240, 55);
+    ctx.fillStyle = '#888';
+    ctx.font = '20px monospace';
+    ctx.fillText('Press Continue when ready', 240, 100);
+  } else if (expState === 'done') {
+    ctx.fillText('Done!', 240, 55);
+    ctx.fillStyle = '#888';
+    ctx.font = '20px monospace';
+    ctx.fillText(`${trialLog.length} trials logged`, 240, 100);
+  }
+
+  hudTexture.needsUpdate = true;
+}
+drawHUD();
+
+// --- Ray-panel intersection ---
+const raycaster = new THREE.Raycaster();
+const tempMatrix = new THREE.Matrix4();
+let prevSelectState = [false, false];
+
+function getButtonHit(controller) {
+  tempMatrix.identity().extractRotation(controller.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+
+  const hits = raycaster.intersectObject(panelMesh);
+  if (hits.length === 0) return null;
+  const uv = hits[0].uv;
+  if (!uv) return null;
+  const px = uv.x * 512;
+  const py = (1 - uv.y) * 320;
+
+  if (expState === 'idle') {
+    if (py >= 90 && py <= 160 && px >= 131 && px <= 381) return 'start';
+    if (py >= 215 && py <= 265) {
+      if (px >= 30 && px <= 240) return 'showreal';
+      if (px >= 272 && px <= 482) return 'hidereal';
+    }
+  } else if (expState === 'rest') {
+    if (py >= 100 && py <= 170 && px >= 131 && px <= 381) return 'continue';
+    if (py >= 225 && py <= 275) {
+      if (px >= 30 && px <= 240) return 'showreal';
+      if (px >= 272 && px <= 482) return 'hidereal';
+    }
+  } else if (expState === 'done') {
+    if (py >= 95 && py <= 150) {
+      if (px >= 20 && px <= 250) return 'download';
+      if (px >= 262 && px <= 492) return 'plots';
+    }
+  }
+  return null;
+}
+
+// --- WebXR session ---
+const enterBtn = document.getElementById('enterVR');
+
+if (navigator.xr) {
+  navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+    if (supported) {
+      enterBtn.disabled = false;
+      enterBtn.textContent = 'Enter VR';
+    } else {
+      enterBtn.textContent = 'VR Not Supported';
+    }
+  });
+} else {
+  enterBtn.textContent = 'WebXR Not Available';
+}
+
+let xrSession = null;
+let refSpace = null;
+
+enterBtn.addEventListener('click', async () => {
+  if (xrSession) return;
+  try {
+    const session = await navigator.xr.requestSession('immersive-vr', {
+      requiredFeatures: ['hand-tracking'],
+      optionalFeatures: ['local-floor', 'bounded-floor']
+    });
+    xrSession = session;
+    renderer.xr.setSession(session);
+    session.addEventListener('end', () => { xrSession = null; });
+    enterBtn.textContent = 'In VR';
+  } catch (e) {
+    console.error('Failed to start XR session:', e);
+  }
+});
+
+// --- Resize ---
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- Render loop ---
+const _headRight = new THREE.Vector3();
+const _headForward = new THREE.Vector3();
+const _offsetWorld = new THREE.Vector3();
+
+renderer.setAnimationLoop((timestamp, frame) => {
+  if (frame && renderer.xr.isPresenting) {
+    const session = renderer.xr.getSession();
+    refSpace = renderer.xr.getReferenceSpace();
+
+    // Compute head-relative offset
+    const xrCamera = renderer.xr.getCamera();
+    _headForward.set(0, 0, -1).applyQuaternion(xrCamera.quaternion);
+    _headForward.y = 0;
+    _headForward.normalize();
+    _headRight.crossVectors(_headForward, new THREE.Vector3(0, 1, 0)).negate().normalize();
+    _offsetWorld.set(0, offset.y, 0).addScaledVector(_headRight, offset.x);
+
+    // --- Process input sources ---
+    let hoveredButton = null;
+
+    for (const source of session.inputSources) {
+      // Ghost hand: manually drive ghost joints from right hand tracking data + offset
+      if (source.hand && source.handedness === 'right') {
+        for (const [jointName, jointSpace] of source.hand) {
+          const jointPose = frame.getJointPose(jointSpace, refSpace);
+          const ghostJoint = ghostHand.joints[jointName];
+          if (jointPose && ghostJoint) {
+            ghostJoint.position.set(
+              jointPose.transform.position.x + _offsetWorld.x,
+              jointPose.transform.position.y + _offsetWorld.y,
+              jointPose.transform.position.z + _offsetWorld.z
+            );
+            ghostJoint.quaternion.set(
+              jointPose.transform.orientation.x,
+              jointPose.transform.orientation.y,
+              jointPose.transform.orientation.z,
+              jointPose.transform.orientation.w
+            );
+          }
+
+          // Track ghost (offset) and real fingertip positions
+          if (jointName === 'index-finger-tip' && jointPose) {
+            ghostIndexTipPos.set(
+              jointPose.transform.position.x + _offsetWorld.x,
+              jointPose.transform.position.y + _offsetWorld.y,
+              jointPose.transform.position.z + _offsetWorld.z
+            );
+            realIndexTipPos.set(
+              jointPose.transform.position.x,
+              jointPose.transform.position.y,
+              jointPose.transform.position.z
+            );
+          }
+        }
+
+        // --- Contact detection + measurement window ---
+        if (expState === 'running' && targetMesh.visible) {
+          if (measuring) {
+            // During measurement window: track min distance
+            updateMeasureWindow();
+            if (!measuring) drawHUD(); // window just ended, trial completed
+          } else if (!trialLocked) {
+            const dist = ghostIndexTipPos.distanceTo(targetMesh.position);
+            if (dist < CONTACT_THRESHOLD) {
+              trialLocked = true;
+              startMeasureWindow();
+            }
+          }
+        }
+      }
+    }
+
+    // --- Controller ray interaction with panel ---
+    for (let ci = 0; ci < 2; ci++) {
+      const ctrl = ci === 0 ? controller0 : controller1;
+      const hit = getButtonHit(ctrl);
+      if (hit) hoveredButton = hit;
+
+      const source = session.inputSources[ci];
+      if (source && source.gamepad) {
+        const triggerPressed = source.gamepad.buttons[0] && source.gamepad.buttons[0].pressed;
+        if (triggerPressed && !prevSelectState[ci] && hit) {
+          if (hit === 'start') {
+            currentBlock = 0;
+            startNextBlock();
+            drawHUD();
+          } else if (hit === 'continue') {
+            startNextBlock();
+            drawHUD();
+          } else if (hit === 'download') {
+            downloadCSV();
+          } else if (hit === 'plots') {
+            showPlots();
+          } else if (hit === 'showreal') {
+            realHandVisible = true;
+          } else if (hit === 'hidereal') {
+            realHandVisible = false;
+          }
+        }
+        prevSelectState[ci] = triggerPressed;
+      }
+    }
+
+    // Enforce real right hand visibility every frame
+    if (rightHandObj) {
+      rightHandObj.visible = realHandVisible;
+    }
+
+    drawStatusPanel(hoveredButton);
+  }
+
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

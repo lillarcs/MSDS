@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebXR Experiments</title>
+<style>
+  body {
+    margin: 0; padding: 40px;
+    background: #111; color: #eee;
+    font-family: -apple-system, sans-serif;
+  }
+  h1 { color: #44aaff; margin-bottom: 8px; }
+  p.sub { color: #888; margin-top: 0; margin-bottom: 32px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  a.card {
+    display: block; padding: 20px;
+    background: #1a1a2a; border: 1px solid #333;
+    border-radius: 10px; text-decoration: none;
+    color: #eee; transition: border-color 0.2s, background 0.2s;
+  }
+  a.card:hover { border-color: #44aaff; background: #1e1e32; }
+  .card h2 { margin: 0 0 6px 0; font-size: 18px; color: #44aaff; }
+  .card p { margin: 0; font-size: 14px; color: #999; line-height: 1.4; }
+  .card .tag {
+    display: inline-block; margin-top: 10px; padding: 2px 8px;
+    font-size: 11px; border-radius: 4px;
+    background: #2a2a3a; color: #888;
+  }
+</style>
+</head>
+<body>
+<h1>WebXR Experiments</h1>
+<p class="sub">Meta Quest 3 — Hand Tracking & Controller Experiments</p>
+<div class="grid">
+
+  <a class="card" href="webxr-proprioception-original.html">
+    <h2>Proprioception (Original)</h2>
+    <p>First prototype — ghost hand with sphere joints, offset right hand.</p>
+    <span class="tag">hands</span>
+  </a>
+
+  <a class="card" href="webxr-proprioception.html">
+    <h2>Proprioception Sandbox</h2>
+    <p>Ghost right hand with mesh model, head-relative offset, adjustable via thumbstick. Real hand show/hide toggle.</p>
+    <span class="tag">hands</span>
+  </a>
+
+  <a class="card" href="webxr-proprioception-experiment.html">
+    <h2>Proprioception Experiment</h2>
+    <p>Full experiment: 10 blocks with random offsets (±15cm), 10 target-touch trials per block. Accuracy measurement window, CSV export, and in-VR plots with whiskers.</p>
+    <span class="tag">hands</span> <span class="tag">experiment</span>
+  </a>
+
+  <a class="card" href="webxr-speed-constraint.html">
+    <h2>Speed Constraint (Hands) v1</h2>
+    <p>Movement speed limit on both hands. Ghost freezes blue when too fast. Stereo sawtooth buzz audio cue. Joystick-adjustable limit.</p>
+    <span class="tag">hands</span> <span class="tag">audio</span>
+  </a>
+
+  <a class="card" href="webxr-speed-constraint-v2.html">
+    <h2>Speed Constraint (Hands) v2</h2>
+    <p>Same speed constraint with relaxing warm sine chord audio — fundamental + octave + fifth. Gentle pitch rise as speed increases. Stereo panning per hand.</p>
+    <span class="tag">hands</span> <span class="tag">audio</span>
+  </a>
+
+  <a class="card" href="webxr-speed-constraint-controllers.html">
+    <h2>Speed Constraint (Controllers)</h2>
+    <p>Same speed constraint applied to Quest controllers. Ghost controller shape freezes at last position. No hand tracking required.</p>
+    <span class="tag">controllers</span> <span class="tag">audio</span>
+  </a>
+
+  <a class="card" href="webxr-soothing-shapes.html">
+    <h2>Soothing Shapes</h2>
+    <p>Calming hand-tracking game. Touch floating shapes to burst them into colorful confetti with pleasant chime sounds. Pentatonic scale audio, gentle pulsing shapes.</p>
+    <span class="tag">hands</span> <span class="tag">audio</span> <span class="tag">game</span>
+  </a>
+
+  <a class="card" href="webxr-speed-constraint-controllers-q2.html">
+    <h2>Speed Constraint (Controllers) — Quest 2</h2>
+    <p>Controller-only speed constraint for Quest 2. Warm sine chord audio with stereo panning. No hand tracking required.</p>
+    <span class="tag">controllers</span> <span class="tag">audio</span> <span class="tag">Quest 2</span>
+  </a>
+
+</div>
+</body>
+</html>

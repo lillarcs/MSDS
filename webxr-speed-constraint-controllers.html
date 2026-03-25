@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebXR Speed Constraint — Controllers</title>
+<style>
+  body { margin: 0; background: #111; color: #fff; font-family: sans-serif; overflow: hidden; }
+  #enterVR {
+    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+    padding: 16px 32px; font-size: 18px; background: #44aaff; color: #000;
+    border: none; border-radius: 8px; cursor: pointer; z-index: 10;
+  }
+  #enterVR:disabled { opacity: 0.4; cursor: default; }
+  #info { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); text-align: center; opacity: 0.7; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="info">WebXR Speed Constraint (Controllers) — Meta Quest 3</div>
+<button id="enterVR" disabled>Enter VR</button>
+
+<script type="module">
+import * as THREE from 'three';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+// ============================================================
+// CONFIGURATION
+// ============================================================
+let maxSpeed = 0.05;           // 5 cm/s speed limit
+const SPEED_STEP = 0.001;
+const SPEED_MIN = 0.01;
+const SPEED_MAX = 0.50;
+const DEADZONE = 0.1;
+const UNFREEZE_DIST = 0.02;   // 2 cm
+const SMOOTH_WINDOW = 100;
+
+// Audio cue
+const BUZZ_FREQ_MIN = 80;
+const BUZZ_FREQ_MAX = 600;
+const BUZZ_VOL_MIN = 0.0;
+const BUZZ_VOL_MAX = 0.3;
+// ============================================================
+
+// --- Audio engine ---
+let audioCtx = null;
+let buzzOsc = null;
+let buzzGain = null;
+let audioReady = false;
+
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  const silentBuf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+  const silentSrc = audioCtx.createBufferSource();
+  silentSrc.buffer = silentBuf;
+  silentSrc.connect(audioCtx.destination);
+  silentSrc.start();
+
+  buzzOsc = audioCtx.createOscillator();
+  buzzOsc.type = 'sawtooth';
+  buzzOsc.frequency.value = BUZZ_FREQ_MIN;
+
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 1200;
+  filter.Q.value = 1.0;
+
+  buzzGain = audioCtx.createGain();
+  buzzGain.gain.value = 0;
+
+  buzzOsc.connect(filter);
+  filter.connect(buzzGain);
+  buzzGain.connect(audioCtx.destination);
+  buzzOsc.start();
+  audioReady = true;
+  audioCtx.resume();
+}
+
+function updateBuzz(speedRatio) {
+  if (!audioReady) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+
+  const r = Math.min(Math.max(speedRatio, 0), 1.5);
+  const freq = BUZZ_FREQ_MIN + (BUZZ_FREQ_MAX - BUZZ_FREQ_MIN) * Math.min(r, 1);
+  const vol = BUZZ_VOL_MIN + (BUZZ_VOL_MAX - BUZZ_VOL_MIN) * r;
+
+  const t = audioCtx.currentTime;
+  buzzOsc.frequency.setTargetAtTime(freq, t, 0.05);
+  buzzGain.gain.setTargetAtTime(Math.min(vol, BUZZ_VOL_MAX), t, 0.05);
+}
+
+// --- Scene setup ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+camera.position.set(0, 1.6, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.sortObjects = true;
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(1, 3, 2);
+scene.add(dirLight);
+
+scene.add(new THREE.GridHelper(50, 100, 0x444444, 0x222222));
+
+// --- Controller setup ---
+const controllerModelFactory = new XRControllerModelFactory();
+
+// Real controllers (grip space — for model rendering)
+const grip0 = renderer.xr.getControllerGrip(0);
+const gripModel0 = controllerModelFactory.createControllerModel(grip0);
+grip0.add(gripModel0);
+scene.add(grip0);
+
+const grip1 = renderer.xr.getControllerGrip(1);
+const gripModel1 = controllerModelFactory.createControllerModel(grip1);
+grip1.add(gripModel1);
+scene.add(grip1);
+
+// Controllers (target ray space — for position tracking + ray)
+const controller0 = renderer.xr.getController(0);
+scene.add(controller0);
+const controller1 = renderer.xr.getController(1);
+scene.add(controller1);
+
+// Map to handedness at runtime
+const gripByHandedness = {};
+const controllerByHandedness = {};
+
+controller0.addEventListener('connected', (event) => {
+  if (event.data) {
+    controllerByHandedness[event.data.handedness] = controller0;
+    gripByHandedness[event.data.handedness] = grip0;
+  }
+});
+controller1.addEventListener('connected', (event) => {
+  if (event.data) {
+    controllerByHandedness[event.data.handedness] = controller1;
+    gripByHandedness[event.data.handedness] = grip1;
+  }
+});
+
+// --- Ghost controllers (frozen copies using real controller models) ---
+// Create ghost grip groups that load the same controller model via XRControllerModelFactory
+const ghostGrip0 = new THREE.Group();
+const ghostGripModel0 = controllerModelFactory.createControllerModel(ghostGrip0);
+ghostGrip0.add(ghostGripModel0);
+ghostGrip0.visible = false;
+scene.add(ghostGrip0);
+
+const ghostGrip1 = new THREE.Group();
+const ghostGripModel1 = controllerModelFactory.createControllerModel(ghostGrip1);
+ghostGrip1.add(ghostGripModel1);
+ghostGrip1.visible = false;
+scene.add(ghostGrip1);
+
+// Relay connected events from real grips to ghost grips to trigger model loading
+grip0.addEventListener('connected', (event) => {
+  ghostGrip0.dispatchEvent({ type: 'connected', data: event.data });
+});
+grip1.addEventListener('connected', (event) => {
+  ghostGrip1.dispatchEvent({ type: 'connected', data: event.data });
+});
+grip0.addEventListener('disconnected', () => {
+  ghostGrip0.dispatchEvent({ type: 'disconnected' });
+});
+grip1.addEventListener('disconnected', () => {
+  ghostGrip1.dispatchEvent({ type: 'disconnected' });
+});
+
+const ghostGripByHandedness = {};
+controller0.addEventListener('connected', (event) => {
+  if (event.data) ghostGripByHandedness[event.data.handedness] = ghostGrip0;
+});
+controller1.addEventListener('connected', (event) => {
+  if (event.data) ghostGripByHandedness[event.data.handedness] = ghostGrip1;
+});
+
+// Ghost material tinting state
+const ghostMatState = {
+  left:  { collected: false, materials: [] },
+  right: { collected: false, materials: [] }
+};
+
+function collectGhostMaterials(side) {
+  const gms = ghostMatState[side];
+  if (gms.collected) return;
+  const ghost = ghostGripByHandedness[side];
+  if (!ghost) return;
+  ghost.traverse((child) => {
+    if (child.isMesh) {
+      child.material = child.material.clone();
+      gms.materials.push(child.material);
+      gms.collected = true;
+    }
+  });
+}
+
+function setGhostTint(side, frozen) {
+  const gms = ghostMatState[side];
+  for (const mat of gms.materials) {
+    if (frozen) {
+      mat.color.set(0x4488ff);
+      mat.transparent = true;
+      mat.opacity = 0.85;
+      mat.depthWrite = true;
+      mat.depthTest = true;
+      mat.needsUpdate = true;
+    } else {
+      // Reset to default (won't matter since ghost is hidden when unfrozen)
+      mat.transparent = false;
+      mat.opacity = 1.0;
+      mat.needsUpdate = true;
+    }
+  }
+}
+
+// Real grip material state for transparency
+const gripMatState = {
+  left:  { collected: false, materials: [] },
+  right: { collected: false, materials: [] }
+};
+
+function collectGripMaterials(side) {
+  const gms = gripMatState[side];
+  if (gms.collected) return;
+  const grip = gripByHandedness[side];
+  if (!grip) return;
+  grip.traverse((child) => {
+    if (child.isMesh) {
+      child.material = child.material.clone();
+      gms.materials.push(child.material);
+      gms.collected = true;
+    }
+  });
+}
+
+function setRealGripVisible(side, frozen) {
+  const grip = gripByHandedness[side];
+  if (!grip) return;
+  if (frozen) {
+    grip.visible = true;
+    grip.traverse((child) => { child.renderOrder = 1; });
+    const gms = gripMatState[side];
+    for (const mat of gms.materials) {
+      mat.transparent = true;
+      mat.depthWrite = false;
+      mat.depthTest = true;
+      mat.opacity = 0.25;
+      mat.needsUpdate = true;
+    }
+  } else {
+    grip.visible = true;
+    const gms = gripMatState[side];
+    for (const mat of gms.materials) {
+      mat.transparent = false;
+      mat.depthWrite = true;
+      mat.opacity = 1.0;
+      mat.needsUpdate = true;
+    }
+  }
+}
+
+// Ray lines
+function makeRayLine() {
+  const geo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -3)
+  ]);
+  return new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.5 }));
+}
+controller0.add(makeRayLine());
+controller1.add(makeRayLine());
+
+// --- Speed constraint state (per controller) ---
+function createCtrlState() {
+  return {
+    frozen: false,
+    prevPos: null, prevTime: 0,
+    speed: 0,
+    speedBuffer: new Float32Array(SMOOTH_WINDOW),
+    speedIdx: 0, speedCount: 0,
+    frozenPos: new THREE.Vector3(),
+    frozenQuat: new THREE.Quaternion()
+  };
+}
+
+const ctrlState = { left: createCtrlState(), right: createCtrlState() };
+
+function pushSpeed(cs, rawSpeed) {
+  cs.speedBuffer[cs.speedIdx] = rawSpeed;
+  cs.speedIdx = (cs.speedIdx + 1) % SMOOTH_WINDOW;
+  if (cs.speedCount < SMOOTH_WINDOW) cs.speedCount++;
+  let sum = 0;
+  for (let i = 0; i < cs.speedCount; i++) sum += cs.speedBuffer[i];
+  cs.speed = sum / cs.speedCount;
+}
+
+// --- HUD ---
+const hudCanvas = document.createElement('canvas');
+hudCanvas.width = 480;
+hudCanvas.height = 200;
+const hudCtx = hudCanvas.getContext('2d');
+const hudTexture = new THREE.CanvasTexture(hudCanvas);
+
+const hudMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.42, 0.17),
+  new THREE.MeshBasicMaterial({ map: hudTexture, transparent: true, opacity: 0.9 })
+);
+hudMesh.position.set(0, 1.65, -1.2);
+scene.add(hudMesh);
+
+function drawHUD() {
+  const ctx = hudCtx;
+  ctx.clearRect(0, 0, 480, 200);
+  ctx.fillStyle = 'rgba(10,10,20,0.85)';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, 480, 200, 12);
+  ctx.fill();
+
+  const limitCm = (maxSpeed * 100).toFixed(0);
+  ctx.fillStyle = '#888';
+  ctx.font = '18px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`Speed limit: ${limitCm} cm/s`, 240, 24);
+
+  for (const [side, x] of [['left', 120], ['right', 360]]) {
+    const cs = ctrlState[side];
+    ctx.font = 'bold 20px monospace';
+    ctx.fillStyle = '#aaa';
+    ctx.fillText(side.toUpperCase(), x, 55);
+    ctx.fillStyle = cs.frozen ? '#ff4444' : '#44ff44';
+    ctx.font = '18px monospace';
+    ctx.fillText(`${(cs.speed * 100).toFixed(1)} cm/s`, x, 80);
+    ctx.font = 'bold 22px monospace';
+    ctx.fillText(cs.frozen ? 'FROZEN' : 'OK', x, 108);
+  }
+
+  ctx.strokeStyle = '#444';
+  ctx.beginPath();
+  ctx.moveTo(240, 40);
+  ctx.lineTo(240, 120);
+  ctx.stroke();
+
+  const anyFrozen = ctrlState.left.frozen || ctrlState.right.frozen;
+  ctx.fillStyle = '#666';
+  ctx.font = '14px sans-serif';
+  ctx.fillText(anyFrozen
+    ? 'Move controller(s) back to frozen position slowly'
+    : 'Move slowly to stay under the speed limit', 240, 145);
+
+  hudTexture.needsUpdate = true;
+}
+drawHUD();
+
+// --- WebXR session ---
+const enterBtn = document.getElementById('enterVR');
+
+if (navigator.xr) {
+  navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+    if (supported) {
+      enterBtn.disabled = false;
+      enterBtn.textContent = 'Enter VR';
+    } else {
+      enterBtn.textContent = 'VR Not Supported';
+    }
+  });
+} else {
+  enterBtn.textContent = 'WebXR Not Available';
+}
+
+let xrSession = null;
+let refSpace = null;
+
+enterBtn.addEventListener('click', async () => {
+  initAudio();
+  if (xrSession) return;
+  try {
+    const session = await navigator.xr.requestSession('immersive-vr', {
+      optionalFeatures: ['local-floor', 'bounded-floor']
+    });
+    xrSession = session;
+    renderer.xr.setSession(session);
+    session.addEventListener('end', () => { xrSession = null; });
+    enterBtn.textContent = 'In VR';
+  } catch (e) {
+    console.error('Failed to start XR session:', e);
+  }
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- Render loop ---
+const _pos = new THREE.Vector3();
+
+renderer.setAnimationLoop((timestamp, frame) => {
+  if (frame && renderer.xr.isPresenting) {
+    const session = renderer.xr.getSession();
+    refSpace = renderer.xr.getReferenceSpace();
+
+    // Joystick: adjust speed limit
+    for (const source of session.inputSources) {
+      const gp = source.gamepad;
+      if (gp && gp.axes.length >= 4) {
+        const axisY = gp.axes[3];
+        if (Math.abs(axisY) > DEADZONE) {
+          maxSpeed -= axisY * SPEED_STEP;
+          maxSpeed = Math.max(SPEED_MIN, Math.min(SPEED_MAX, maxSpeed));
+        }
+      }
+    }
+
+    // Process each controller
+    for (const source of session.inputSources) {
+      if (!source.gripSpace) continue;
+      const side = source.handedness;
+      if (side !== 'left' && side !== 'right') continue;
+
+      const cs = ctrlState[side];
+      const ghost = ghostGripByHandedness[side];
+      const grip = gripByHandedness[side];
+
+      // Get grip pose
+      const gripPose = frame.getPose(source.gripSpace, refSpace);
+      if (!gripPose) continue;
+
+      _pos.set(
+        gripPose.transform.position.x,
+        gripPose.transform.position.y,
+        gripPose.transform.position.z
+      );
+
+      // Try collecting materials
+      collectGripMaterials(side);
+
+      // Compute speed
+      const now = performance.now();
+      if (cs.prevPos && cs.prevTime > 0) {
+        const dt = (now - cs.prevTime) / 1000;
+        if (dt > 0 && dt < 0.5) {
+          const dist = _pos.distanceTo(cs.prevPos);
+          pushSpeed(cs, dist / dt);
+
+          if (!cs.frozen) {
+            if (cs.speed > maxSpeed) {
+              cs.frozen = true;
+              // Freeze: store current grip world position/orientation
+              if (grip) {
+                cs.frozenPos.setFromMatrixPosition(grip.matrixWorld);
+                cs.frozenQuat.setFromRotationMatrix(grip.matrixWorld);
+              } else {
+                cs.frozenPos.copy(_pos);
+              }
+              // Show ghost at frozen position, tint blue
+              if (ghost) {
+                ghost.position.copy(cs.frozenPos);
+                ghost.quaternion.copy(cs.frozenQuat);
+                ghost.visible = true;
+                ghost.traverse((child) => { child.renderOrder = 0; });
+                collectGhostMaterials(side);
+                setGhostTint(side, true);
+              }
+              // Make real grip transparent
+              setRealGripVisible(side, true);
+            }
+          } else {
+            // Unfreeze when returned to frozen position and slow
+            const returnDist = _pos.distanceTo(cs.frozenPos);
+            if (returnDist < UNFREEZE_DIST && cs.speed < maxSpeed) {
+              cs.frozen = false;
+              if (ghost) ghost.visible = false;
+              setRealGripVisible(side, false);
+            }
+          }
+
+          // Try to collect ghost materials (model may load late)
+          if (ghost && cs.frozen) collectGhostMaterials(side);
+        }
+      }
+
+      if (!cs.prevPos) cs.prevPos = new THREE.Vector3();
+      cs.prevPos.copy(_pos);
+      cs.prevTime = now;
+    }
+
+    // Audio buzz based on max speed across both controllers
+    const maxSpeedRatio = Math.max(
+      ctrlState.left.speed / maxSpeed,
+      ctrlState.right.speed / maxSpeed
+    );
+    updateBuzz(maxSpeedRatio);
+
+    drawHUD();
+  }
+
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

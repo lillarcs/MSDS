@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebXR Speed Constraint Experiment</title>
+<style>
+  body { margin: 0; background: #111; color: #fff; font-family: sans-serif; overflow: hidden; }
+  #enterVR {
+    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+    padding: 16px 32px; font-size: 18px; background: #44aaff; color: #000;
+    border: none; border-radius: 8px; cursor: pointer; z-index: 10;
+  }
+  #enterVR:disabled { opacity: 0.4; cursor: default; }
+  #info { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); text-align: center; opacity: 0.7; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="info">WebXR Speed Constraint Experiment — Meta Quest 3</div>
+<button id="enterVR" disabled>Enter VR</button>
+
+<script type="module">
+import * as THREE from 'three';
+import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
+
+// ============================================================
+// CONFIGURATION
+// ============================================================
+let maxSpeed = 0.05;           // 5 cm/s speed limit (adjustable via joystick)
+const SPEED_STEP = 0.001;     // 0.1 cm/s per frame per unit deflection
+const SPEED_MIN = 0.01;       // 1 cm/s minimum
+const SPEED_MAX = 0.50;       // 50 cm/s maximum
+const DEADZONE = 0.1;
+const UNFREEZE_DIST = 0.02;   // 2 cm — real wrist must return within this of frozen position
+
+// Audio cue: buzzing tone that rises in pitch as speed approaches limit
+// Tone: warm sine chord that rises gently in pitch
+const TONE_FREQ_MIN = 110;    // Hz — low A, warm hum at rest
+const TONE_FREQ_MAX = 330;    // Hz — gentle rise to E4, stays pleasant
+const TONE_VOL_MIN = 0.0;
+const TONE_VOL_MAX = 0.2;     // softer overall
+// ============================================================
+
+// --- Audio engine ---
+// Must be created synchronously inside a user gesture (click) BEFORE any async call
+let audioCtx = null;
+let audioReady = false;
+
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  // Play a tiny silent buffer to permanently unlock audio on Quest
+  const silentBuf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+  const silentSrc = audioCtx.createBufferSource();
+  silentSrc.buffer = silentBuf;
+  silentSrc.connect(audioCtx.destination);
+  silentSrc.start();
+
+  audioReady = true;
+  audioCtx.resume();
+}
+
+// Sound on/off
+let soundEnabled = true;
+let debugBuzzLeft = 0;
+let debugBuzzRight = 0;
+
+// Per-hand tone: sine fundamental + soft octave + perfect fifth = warm chord
+// Each hand panned to its side
+const toneState = { left: null, right: null };
+
+function initTones() {
+  if (toneState.left || !audioCtx) return;
+
+  function makeTone(panVal) {
+    // Fundamental (sine)
+    const osc1 = audioCtx.createOscillator();
+    osc1.type = 'sine';
+    osc1.frequency.value = TONE_FREQ_MIN;
+
+    // Octave above (sine, quieter) — warmth
+    const osc2 = audioCtx.createOscillator();
+    osc2.type = 'sine';
+    osc2.frequency.value = TONE_FREQ_MIN * 2;
+    const oct = audioCtx.createGain();
+    oct.gain.value = 0.3; // softer than fundamental
+
+    // Perfect fifth above (sine, even quieter) — richness
+    const osc3 = audioCtx.createOscillator();
+    osc3.type = 'sine';
+    osc3.frequency.value = TONE_FREQ_MIN * 1.5;
+    const fifth = audioCtx.createGain();
+    fifth.gain.value = 0.15;
+
+    // Mix into a single gain node
+    const mix = audioCtx.createGain();
+    mix.gain.value = 0;
+
+    osc1.connect(mix);
+    osc2.connect(oct); oct.connect(mix);
+    osc3.connect(fifth); fifth.connect(mix);
+
+    // Gentle low-pass to smooth any harshness
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 800;
+    filter.Q.value = 0.5;
+
+    // Panner
+    const panner = audioCtx.createStereoPanner();
+    panner.pan.value = panVal;
+
+    mix.connect(filter);
+    filter.connect(panner);
+    panner.connect(audioCtx.destination);
+
+    osc1.start(); osc2.start(); osc3.start();
+
+    return { osc1, osc2, osc3, mix };
+  }
+
+  toneState.left = makeTone(-0.8);
+  toneState.right = makeTone(0.8);
+}
+
+function updateToneHand(side, speedRatio) {
+  if (!audioReady) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (!toneState.left) initTones();
+  if (!toneState.left) return;
+
+  const tone = toneState[side];
+  const r = Math.min(Math.max(speedRatio, 0), 1.5);
+
+  // Frequency rises gently with speed
+  const freq = TONE_FREQ_MIN + (TONE_FREQ_MAX - TONE_FREQ_MIN) * Math.min(r, 1);
+  // Volume fades in smoothly
+  const vol = soundEnabled ? (TONE_VOL_MIN + (TONE_VOL_MAX - TONE_VOL_MIN) * r) : 0;
+
+  const t = audioCtx.currentTime;
+  // Longer smoothing (0.15s) for a gentler, more relaxing feel
+  tone.osc1.frequency.setTargetAtTime(freq, t, 0.15);
+  tone.osc2.frequency.setTargetAtTime(freq * 2, t, 0.15);
+  tone.osc3.frequency.setTargetAtTime(freq * 1.5, t, 0.15);
+  tone.mix.gain.setTargetAtTime(Math.min(vol, TONE_VOL_MAX), t, 0.15);
+
+  // Track per-hand level for HUD
+  if (side === 'left') debugBuzzLeft = r;
+  else debugBuzzRight = r;
+}
+
+const JOINT_NAMES = [
+  'wrist',
+  'thumb-metacarpal', 'thumb-phalanx-proximal', 'thumb-phalanx-distal', 'thumb-tip',
+  'index-finger-metacarpal', 'index-finger-phalanx-proximal', 'index-finger-phalanx-intermediate', 'index-finger-phalanx-distal', 'index-finger-tip',
+  'middle-finger-metacarpal', 'middle-finger-phalanx-proximal', 'middle-finger-phalanx-intermediate', 'middle-finger-phalanx-distal', 'middle-finger-tip',
+  'ring-finger-metacarpal', 'ring-finger-phalanx-proximal', 'ring-finger-phalanx-intermediate', 'ring-finger-phalanx-distal', 'ring-finger-tip',
+  'pinky-finger-metacarpal', 'pinky-finger-phalanx-proximal', 'pinky-finger-phalanx-intermediate', 'pinky-finger-phalanx-distal', 'pinky-finger-tip'
+];
+
+// --- Scene setup ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+camera.position.set(0, 1.6, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.sortObjects = true;
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(1, 3, 2);
+scene.add(dirLight);
+
+scene.add(new THREE.GridHelper(50, 100, 0x444444, 0x222222));
+
+// --- Hand tracking setup ---
+const handModelFactory = new XRHandModelFactory();
+
+// Real hands — always hidden (we show ghost hands instead)
+const hand0 = renderer.xr.getHand(0);
+hand0.add(handModelFactory.createHandModel(hand0, 'mesh'));
+scene.add(hand0);
+
+const hand1 = renderer.xr.getHand(1);
+hand1.add(handModelFactory.createHandModel(hand1, 'mesh'));
+scene.add(hand1);
+
+// Map hand slots to handedness at runtime
+const handByHandedness = {};
+hand0.addEventListener('connected', (event) => {
+  if (event.data) handByHandedness[event.data.handedness] = hand0;
+});
+hand1.addEventListener('connected', (event) => {
+  if (event.data) handByHandedness[event.data.handedness] = hand1;
+});
+
+// --- Ghost hands (manually driven, can freeze in place) ---
+function createGhostHand() {
+  const ghost = new THREE.Group();
+  ghost.joints = {};
+  for (const name of JOINT_NAMES) {
+    const joint = new THREE.Group();
+    joint.jointName = name;
+    ghost.joints[name] = joint;
+    ghost.add(joint);
+  }
+  scene.add(ghost);
+  const model = handModelFactory.createHandModel(ghost, 'mesh');
+  ghost.add(model);
+  ghost.model = model;
+  ghost.tinted = false;
+  ghost.materials = [];
+  return ghost;
+}
+
+const ghostLeft = createGhostHand();
+const ghostRight = createGhostHand();
+const ghosts = { left: ghostLeft, right: ghostRight };
+
+// Relay connected/disconnected events to ghost hands
+for (const realHand of [hand0, hand1]) {
+  realHand.addEventListener('connected', (event) => {
+    if (event.data && ghosts[event.data.handedness]) {
+      ghosts[event.data.handedness].dispatchEvent({ type: 'connected', data: event.data });
+    }
+  });
+  realHand.addEventListener('disconnected', (event) => {
+    // Try to find which ghost this belongs to
+    for (const side of ['left', 'right']) {
+      if (handByHandedness[side] === realHand) {
+        ghosts[side].dispatchEvent({ type: 'disconnected' });
+      }
+    }
+  });
+}
+
+// Collect cloned materials from a hand model for tinting
+function collectMaterials(obj) {
+  if (obj.tinted) return;
+  const target = obj.model || obj; // ghost has .model, real hand is traversed directly
+  target.traverse((child) => {
+    if (child.isMesh) {
+      child.material = child.material.clone();
+      obj.materials.push(child.material);
+      obj.tinted = true;
+    }
+  });
+}
+
+function setGhostTint(ghost, frozen) {
+  for (const mat of ghost.materials) {
+    if (frozen) {
+      mat.color.set(0x4488ff);
+      mat.transparent = true;
+      mat.opacity = 0.85;
+      mat.depthWrite = true;
+      mat.depthTest = true;
+    } else {
+      mat.color.set(0xddccbb);
+      mat.transparent = false;
+      mat.opacity = 1.0;
+      mat.depthWrite = true;
+      mat.depthTest = true;
+    }
+  }
+  ghost.traverse((child) => { child.renderOrder = 0; });
+}
+
+// Make real hand transparent when frozen, normal when not
+const realHandState = {
+  left:  { tinted: false, materials: [] },
+  right: { tinted: false, materials: [] }
+};
+
+function setRealHandVisible(side, frozen) {
+  const handObj = handByHandedness[side];
+  if (!handObj) return;
+  if (frozen) {
+    handObj.visible = true;
+    handObj.traverse((child) => { child.renderOrder = 1; }); // render after ghost
+    const rhs = realHandState[side];
+    for (const mat of rhs.materials) {
+      mat.transparent = true;
+      mat.depthWrite = false;
+      mat.depthTest = true;
+      mat.opacity = 0.25;
+      mat.needsUpdate = true;
+    }
+  } else {
+    handObj.visible = false;
+  }
+}
+
+// Joints to check speed on (wrist + all fingertips)
+const SPEED_JOINTS = [
+  'wrist',
+  'thumb-tip', 'index-finger-tip', 'middle-finger-tip', 'ring-finger-tip', 'pinky-finger-tip'
+];
+
+// --- Speed constraint state (per hand) ---
+const SMOOTH_WINDOW = 100; // number of frames for moving average
+
+function createHandState() {
+  const prevJointPos = {};
+  const frozenJointPos = {};
+  for (const name of SPEED_JOINTS) {
+    prevJointPos[name] = null;
+    frozenJointPos[name] = new THREE.Vector3();
+  }
+  return {
+    frozen: false, wasFrozen: false,
+    prevJointPos, prevTime: 0,
+    speed: 0,
+    speedBuffer: new Float32Array(SMOOTH_WINDOW),
+    speedIdx: 0, speedCount: 0,
+    frozenJointPos // frozen position for each tracked joint
+  };
+}
+
+const handState = { left: createHandState(), right: createHandState() };
+
+function pushSpeed(hs, rawSpeed) {
+  hs.speedBuffer[hs.speedIdx] = rawSpeed;
+  hs.speedIdx = (hs.speedIdx + 1) % SMOOTH_WINDOW;
+  if (hs.speedCount < SMOOTH_WINDOW) hs.speedCount++;
+  // Compute moving average
+  let sum = 0;
+  for (let i = 0; i < hs.speedCount; i++) sum += hs.speedBuffer[i];
+  hs.speed = sum / hs.speedCount;
+}
+
+// --- Controllers ---
+const controller0 = renderer.xr.getController(0);
+scene.add(controller0);
+const controller1 = renderer.xr.getController(1);
+scene.add(controller1);
+
+function makeRayLine() {
+  const geo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -3)
+  ]);
+  return new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.5 }));
+}
+controller0.add(makeRayLine());
+controller1.add(makeRayLine());
+
+// --- HUD ---
+const hudCanvas = document.createElement('canvas');
+hudCanvas.width = 480;
+hudCanvas.height = 260;
+const hudCtx = hudCanvas.getContext('2d');
+const hudTexture = new THREE.CanvasTexture(hudCanvas);
+
+const hudMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.42, 0.23),
+  new THREE.MeshBasicMaterial({ map: hudTexture, transparent: true, opacity: 0.9 })
+);
+hudMesh.position.set(0, 1.65, -1.2);
+scene.add(hudMesh);
+
+// Track hovered HUD button for ray interaction
+let hudHovered = null;
+
+function drawHUD() {
+  const ctx = hudCtx;
+  ctx.clearRect(0, 0, 480, 260);
+  ctx.fillStyle = 'rgba(10,10,20,0.85)';
+  ctx.beginPath();
+  ctx.roundRect(0, 0, 480, 260, 12);
+  ctx.fill();
+
+  const limitCm = (maxSpeed * 100).toFixed(0);
+  ctx.fillStyle = '#888';
+  ctx.font = '18px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`Speed limit: ${limitCm} cm/s`, 240, 24);
+
+  // Left hand column
+  const ls = handState.left;
+  ctx.font = 'bold 20px monospace';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('LEFT', 120, 55);
+  ctx.fillStyle = ls.frozen ? '#ff4444' : '#44ff44';
+  ctx.font = '18px monospace';
+  ctx.fillText(`${(ls.speed * 100).toFixed(1)} cm/s`, 120, 80);
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText(ls.frozen ? 'FROZEN' : 'OK', 120, 108);
+
+  // Right hand column
+  const rs = handState.right;
+  ctx.font = 'bold 20px monospace';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('RIGHT', 360, 55);
+  ctx.fillStyle = rs.frozen ? '#ff4444' : '#44ff44';
+  ctx.font = '18px monospace';
+  ctx.fillText(`${(rs.speed * 100).toFixed(1)} cm/s`, 360, 80);
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText(rs.frozen ? 'FROZEN' : 'OK', 360, 108);
+
+  // Divider
+  ctx.strokeStyle = '#444';
+  ctx.beginPath();
+  ctx.moveTo(240, 40);
+  ctx.lineTo(240, 120);
+  ctx.stroke();
+
+  // Instruction
+  const anyFrozen = ls.frozen || rs.frozen;
+  ctx.fillStyle = '#666';
+  ctx.font = '14px sans-serif';
+  ctx.fillText(anyFrozen
+    ? 'Move hand(s) back to frozen position slowly to unfreeze'
+    : 'Move slowly to stay under the speed limit', 240, 145);
+
+  // --- Sound section ---
+  ctx.strokeStyle = '#333';
+  ctx.beginPath();
+  ctx.moveTo(20, 165);
+  ctx.lineTo(460, 165);
+  ctx.stroke();
+
+  // Left sound level bar
+  const lLevel = Math.min(debugBuzzLeft, 1.5);
+  const lColor = lLevel < 0.5 ? '#44ff44' : lLevel < 0.85 ? '#ffcc44' : '#ff4444';
+  ctx.fillStyle = '#aaa';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('L', 18, 190);
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.roundRect(35, 178, 180, 14, 4);
+  ctx.fill();
+  ctx.fillStyle = lColor;
+  ctx.beginPath();
+  ctx.roundRect(35, 178, 180 * Math.min(lLevel / 1.2, 1), 14, 4);
+  ctx.fill();
+
+  // Right sound level bar
+  const rLevel = Math.min(debugBuzzRight, 1.5);
+  const rColor = rLevel < 0.5 ? '#44ff44' : rLevel < 0.85 ? '#ffcc44' : '#ff4444';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('R', 248, 190);
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.roundRect(265, 178, 180, 14, 4);
+  ctx.fill();
+  ctx.fillStyle = rColor;
+  ctx.beginPath();
+  ctx.roundRect(265, 178, 180 * Math.min(rLevel / 1.2, 1), 14, 4);
+  ctx.fill();
+
+  // Sound on/off button
+  ctx.textAlign = 'center';
+  ctx.fillStyle = hudHovered === 'soundtoggle'
+    ? (soundEnabled ? '#ff6666' : '#66ff66')
+    : (soundEnabled ? '#ff4444' : '#44cc44');
+  ctx.beginPath();
+  ctx.roundRect(140, 205, 200, 36, 10);
+  ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillText(soundEnabled ? 'Sound OFF' : 'Sound ON', 240, 230);
+
+  hudTexture.needsUpdate = true;
+}
+drawHUD();
+
+// --- Ray-HUD interaction ---
+const raycaster = new THREE.Raycaster();
+const tempMatrix = new THREE.Matrix4();
+let prevTrigger = [false, false];
+
+function getHudHit(controller) {
+  tempMatrix.identity().extractRotation(controller.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+  const hits = raycaster.intersectObject(hudMesh);
+  if (hits.length === 0) return null;
+  const uv = hits[0].uv;
+  if (!uv) return null;
+  const px = uv.x * 480;
+  const py = (1 - uv.y) * 260;
+  if (py >= 205 && py <= 241 && px >= 140 && px <= 340) return 'soundtoggle';
+  return null;
+}
+
+// --- WebXR session ---
+const enterBtn = document.getElementById('enterVR');
+
+if (navigator.xr) {
+  navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+    if (supported) {
+      enterBtn.disabled = false;
+      enterBtn.textContent = 'Enter VR';
+    } else {
+      enterBtn.textContent = 'VR Not Supported';
+    }
+  });
+} else {
+  enterBtn.textContent = 'WebXR Not Available';
+}
+
+let xrSession = null;
+let refSpace = null;
+
+enterBtn.addEventListener('click', async () => {
+  // Init audio SYNCHRONOUSLY in the click handler before any async work
+  initAudio();
+
+  if (xrSession) return;
+  try {
+    const session = await navigator.xr.requestSession('immersive-vr', {
+      requiredFeatures: ['hand-tracking'],
+      optionalFeatures: ['local-floor', 'bounded-floor']
+    });
+    xrSession = session;
+    renderer.xr.setSession(session);
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    session.addEventListener('end', () => { xrSession = null; });
+    enterBtn.textContent = 'In VR';
+  } catch (e) {
+    console.error('Failed to start XR session:', e);
+  }
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- Render loop ---
+const _wristPos = new THREE.Vector3();
+
+renderer.setAnimationLoop((timestamp, frame) => {
+  if (frame && renderer.xr.isPresenting) {
+    const session = renderer.xr.getSession();
+    refSpace = renderer.xr.getReferenceSpace();
+
+    // Joystick: adjust speed limit (either controller, up/down on thumbstick)
+    for (const source of session.inputSources) {
+      const gp = source.gamepad;
+      if (gp && gp.axes.length >= 4) {
+        const axisY = gp.axes[3]; // up = -1, down = +1
+        if (Math.abs(axisY) > DEADZONE) {
+          maxSpeed -= axisY * SPEED_STEP; // push up = increase limit
+          maxSpeed = Math.max(SPEED_MIN, Math.min(SPEED_MAX, maxSpeed));
+        }
+      }
+    }
+
+    for (const source of session.inputSources) {
+      if (!source.hand) continue;
+      const side = source.handedness;
+      if (side !== 'left' && side !== 'right') continue;
+
+      const hs = handState[side];
+      const ghost = ghosts[side];
+      const realHand = handByHandedness[side];
+
+      // Read all joint poses from real hand
+      const poses = {};
+      for (const [jointName, jointSpace] of source.hand) {
+        const pose = frame.getJointPose(jointSpace, refSpace);
+        if (pose) {
+          poses[jointName] = pose;
+        }
+      }
+      if (!poses['wrist']) continue;
+
+      // Compute max speed across all tracked joints (wrist + fingertips)
+      const now = performance.now();
+      if (hs.prevTime > 0) {
+        const dt = (now - hs.prevTime) / 1000;
+        if (dt > 0 && dt < 0.5) {
+          let maxJointSpeed = 0;
+          for (const jn of SPEED_JOINTS) {
+            if (!poses[jn] || !hs.prevJointPos[jn]) continue;
+            _wristPos.set(
+              poses[jn].transform.position.x,
+              poses[jn].transform.position.y,
+              poses[jn].transform.position.z
+            );
+            const dist = _wristPos.distanceTo(hs.prevJointPos[jn]);
+            const spd = dist / dt;
+            if (spd > maxJointSpeed) maxJointSpeed = spd;
+          }
+          pushSpeed(hs, maxJointSpeed);
+
+          if (!hs.frozen) {
+            if (hs.speed > maxSpeed) {
+              hs.frozen = true;
+              // Store frozen position for all tracked joints
+              for (const jn of SPEED_JOINTS) {
+                hs.frozenJointPos[jn].copy(ghost.joints[jn].position);
+              }
+              if (!hs.wasFrozen) {
+                hs.wasFrozen = true;
+                setGhostTint(ghost, true);
+                setRealHandVisible(side, true);
+              }
+            }
+          } else {
+            // Unfreeze: ALL tracked joints must be near their frozen position AND moving slowly
+            let allNear = true;
+            for (const jn of SPEED_JOINTS) {
+              if (!poses[jn]) { allNear = false; break; }
+              _wristPos.set(
+                poses[jn].transform.position.x,
+                poses[jn].transform.position.y,
+                poses[jn].transform.position.z
+              );
+              if (_wristPos.distanceTo(hs.frozenJointPos[jn]) >= UNFREEZE_DIST) {
+                allNear = false;
+                break;
+              }
+            }
+            if (allNear && hs.speed < maxSpeed) {
+              hs.frozen = false;
+              hs.wasFrozen = false;
+              setGhostTint(ghost, false);
+              setRealHandVisible(side, false);
+            }
+          }
+        }
+      }
+
+      // Store current joint positions for next frame
+      for (const jn of SPEED_JOINTS) {
+        if (poses[jn]) {
+          if (!hs.prevJointPos[jn]) hs.prevJointPos[jn] = new THREE.Vector3();
+          hs.prevJointPos[jn].set(
+            poses[jn].transform.position.x,
+            poses[jn].transform.position.y,
+            poses[jn].transform.position.z
+          );
+        }
+      }
+      hs.prevTime = now;
+
+      // Real hand: hidden when unfrozen, transparent when frozen (managed by setRealHandVisible)
+      // Enforce hidden by default each frame (Three.js may reset on reconnect)
+      if (realHand && !hs.frozen) realHand.visible = false;
+
+      // Collect real hand materials for tinting (once)
+      const rhs = realHandState[side];
+      if (!rhs.tinted && realHand) {
+        realHand.traverse((child) => {
+          if (child.isMesh) {
+            child.material = child.material.clone();
+            rhs.materials.push(child.material);
+            rhs.tinted = true;
+          }
+        });
+      }
+
+      // Update ghost joints: follow real hand when not frozen, stay put when frozen
+      if (!hs.frozen) {
+        for (const [jointName, pose] of Object.entries(poses)) {
+          const gj = ghost.joints[jointName];
+          if (gj) {
+            gj.position.set(
+              pose.transform.position.x,
+              pose.transform.position.y,
+              pose.transform.position.z
+            );
+            gj.quaternion.set(
+              pose.transform.orientation.x,
+              pose.transform.orientation.y,
+              pose.transform.orientation.z,
+              pose.transform.orientation.w
+            );
+          }
+        }
+      }
+      // When frozen: ghost joints are not updated, so they stay in place
+
+      // Try to collect materials once mesh loads
+      if (!ghost.tinted) collectMaterials(ghost);
+    }
+
+    // Update audio buzz per hand (stereo: left ear = left hand, right ear = right hand)
+    updateToneHand('left', handState.left.speed / maxSpeed);
+    updateToneHand('right', handState.right.speed / maxSpeed);
+
+    // --- HUD ray interaction (test sound button) ---
+    hudHovered = null;
+    for (let ci = 0; ci < 2; ci++) {
+      const ctrl = ci === 0 ? controller0 : controller1;
+      const hit = getHudHit(ctrl);
+      if (hit) hudHovered = hit;
+
+      const source = session.inputSources[ci];
+      if (source && source.gamepad) {
+        const triggerPressed = source.gamepad.buttons[0] && source.gamepad.buttons[0].pressed;
+        if (triggerPressed && !prevTrigger[ci] && hit === 'soundtoggle') {
+          soundEnabled = !soundEnabled;
+        }
+        prevTrigger[ci] = triggerPressed;
+      }
+    }
+
+    drawHUD();
+  }
+
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

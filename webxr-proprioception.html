@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebXR Proprioception Experiment</title>
+<style>
+  body { margin: 0; background: #111; color: #fff; font-family: sans-serif; overflow: hidden; }
+  #enterVR {
+    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+    padding: 16px 32px; font-size: 18px; background: #44aaff; color: #000;
+    border: none; border-radius: 8px; cursor: pointer; z-index: 10;
+  }
+  #enterVR:disabled { opacity: 0.4; cursor: default; }
+  #info { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); text-align: center; opacity: 0.7; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="info">WebXR Proprioception Experiment — Meta Quest 3</div>
+<button id="enterVR" disabled>Enter VR</button>
+
+<script type="module">
+import * as THREE from 'three';
+import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
+
+// --- Joint names in spec order (25 joints) ---
+const JOINT_NAMES = [
+  'wrist',
+  'thumb-metacarpal', 'thumb-phalanx-proximal', 'thumb-phalanx-distal', 'thumb-tip',
+  'index-finger-metacarpal', 'index-finger-phalanx-proximal', 'index-finger-phalanx-intermediate', 'index-finger-phalanx-distal', 'index-finger-tip',
+  'middle-finger-metacarpal', 'middle-finger-phalanx-proximal', 'middle-finger-phalanx-intermediate', 'middle-finger-phalanx-distal', 'middle-finger-tip',
+  'ring-finger-metacarpal', 'ring-finger-phalanx-proximal', 'ring-finger-phalanx-intermediate', 'ring-finger-phalanx-distal', 'ring-finger-tip',
+  'pinky-finger-metacarpal', 'pinky-finger-phalanx-proximal', 'pinky-finger-phalanx-intermediate', 'pinky-finger-phalanx-distal', 'pinky-finger-tip'
+];
+
+// --- Scene setup ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+camera.position.set(0, 1.6, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// Lighting
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(1, 3, 2);
+scene.add(dirLight);
+
+// Infinite grid floor
+const gridHelper = new THREE.GridHelper(50, 100, 0x444444, 0x222222);
+gridHelper.position.y = 0;
+scene.add(gridHelper);
+
+// --- Hand tracking setup ---
+const handModelFactory = new XRHandModelFactory();
+
+// Both hand slots — we don't know which index is left/right until connected
+const hand0 = renderer.xr.getHand(0);
+const handModel0 = handModelFactory.createHandModel(hand0, 'mesh');
+hand0.add(handModel0);
+scene.add(hand0);
+
+const hand1 = renderer.xr.getHand(1);
+const handModel1 = handModelFactory.createHandModel(hand1, 'mesh');
+hand1.add(handModel1);
+scene.add(hand1);
+
+// Track which hand object is the right hand (resolved at runtime via handedness)
+let rightHandObj = null;
+let realHandVisible = false;
+
+// Listen for connected events to identify which slot is the right hand
+hand0.addEventListener('connected', (event) => {
+  if (event.data && event.data.handedness === 'right') rightHandObj = hand0;
+});
+hand1.addEventListener('connected', (event) => {
+  if (event.data && event.data.handedness === 'right') rightHandObj = hand1;
+});
+
+// --- Ghost right hand (mesh model, manually driven with offset) ---
+// Create a fake "hand" group that mimics the structure XRHandModelFactory expects:
+// - It's an EventDispatcher (THREE.Group inherits this)
+// - It needs a .joints object mapping joint names to child Object3Ds
+// - The mesh model listens for 'connected' event with { data: { handedness } }
+const ghostHand = new THREE.Group();
+ghostHand.joints = {};
+for (const name of JOINT_NAMES) {
+  const joint = new THREE.Group();
+  joint.jointName = name;
+  ghostHand.joints[name] = joint;
+  ghostHand.add(joint);
+}
+scene.add(ghostHand);
+
+// Create a mesh hand model on the ghost hand group
+const ghostModel = handModelFactory.createHandModel(ghostHand, 'mesh');
+ghostHand.add(ghostModel);
+
+// When the real right hand connects (on either slot), relay the event to the ghost so its mesh loads
+hand0.addEventListener('connected', (event) => {
+  if (event.data && event.data.handedness === 'right') {
+    ghostHand.dispatchEvent({ type: 'connected', data: event.data });
+  }
+});
+hand1.addEventListener('connected', (event) => {
+  if (event.data && event.data.handedness === 'right') {
+    ghostHand.dispatchEvent({ type: 'connected', data: event.data });
+  }
+});
+hand0.addEventListener('disconnected', () => {
+  if (rightHandObj === hand0) ghostHand.dispatchEvent({ type: 'disconnected' });
+});
+hand1.addEventListener('disconnected', () => {
+  if (rightHandObj === hand1) ghostHand.dispatchEvent({ type: 'disconnected' });
+});
+
+// Ghost visible by default
+ghostHand.visible = true;
+
+// --- Offset state ---
+const offset = { x: 0.3, y: 0.0 };
+const DEADZONE = 0.1;
+const SPEED = 0.002;
+const CLAMP = 1.0;
+
+// --- Controllers (for thumbstick + ray) ---
+const controller0 = renderer.xr.getController(0); // left
+scene.add(controller0);
+const controller1 = renderer.xr.getController(1); // right
+scene.add(controller1);
+
+// Ray lines for both controllers
+function makeRayLine() {
+  const geo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -3)
+  ]);
+  const mat = new THREE.LineBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.5 });
+  return new THREE.Line(geo, mat);
+}
+const ray0 = makeRayLine();
+controller0.add(ray0);
+const ray1 = makeRayLine();
+controller1.add(ray1);
+
+// --- UI Panel (Show/Hide Ghost buttons) ---
+const panelCanvas = document.createElement('canvas');
+panelCanvas.width = 512;
+panelCanvas.height = 256;
+const panelCtx = panelCanvas.getContext('2d');
+const panelTexture = new THREE.CanvasTexture(panelCanvas);
+
+const panelMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.5, 0.25),
+  new THREE.MeshBasicMaterial({ map: panelTexture, transparent: true, opacity: 0.95 })
+);
+panelMesh.position.set(0, 1.1, -1.0);
+scene.add(panelMesh);
+
+function drawPanel(hovered) {
+  const ctx = panelCtx;
+  ctx.clearRect(0, 0, 512, 256);
+  // Background
+  ctx.fillStyle = 'rgba(20,20,30,0.9)';
+  ctx.roundRect(0, 0, 512, 256, 16);
+  ctx.fill();
+
+  // Title
+  ctx.fillStyle = '#aaa';
+  ctx.font = '24px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Real Hand Control', 256, 40);
+
+  // Show Real button
+  ctx.fillStyle = hovered === 'show' ? '#66ccff' : '#44aaff';
+  ctx.roundRect(30, 70, 210, 80, 12);
+  ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.font = 'bold 28px sans-serif';
+  ctx.fillText('Show Real', 135, 120);
+
+  // Hide Real button
+  ctx.fillStyle = hovered === 'hide' ? '#ff6666' : '#ff4444';
+  ctx.beginPath();
+  ctx.roundRect(272, 70, 210, 80, 12);
+  ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.fillText('Hide Real', 377, 120);
+
+  // Status
+  ctx.fillStyle = '#888';
+  ctx.font = '20px sans-serif';
+  ctx.fillText(realHandVisible ? 'Real Hand: VISIBLE' : 'Real Hand: HIDDEN', 256, 200);
+
+  panelTexture.needsUpdate = true;
+}
+drawPanel(null);
+
+// --- HUD (offset display) ---
+const hudCanvas = document.createElement('canvas');
+hudCanvas.width = 400;
+hudCanvas.height = 128;
+const hudCtx = hudCanvas.getContext('2d');
+const hudTexture = new THREE.CanvasTexture(hudCanvas);
+
+const hudMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.35, 0.1),
+  new THREE.MeshBasicMaterial({ map: hudTexture, transparent: true, opacity: 0.9 })
+);
+hudMesh.position.set(0, 1.65, -1.2);
+scene.add(hudMesh);
+
+function drawHUD() {
+  const ctx = hudCtx;
+  ctx.clearRect(0, 0, 400, 128);
+  ctx.fillStyle = 'rgba(10,10,20,0.85)';
+  ctx.roundRect(0, 0, 400, 128, 12);
+  ctx.fill();
+  ctx.fillStyle = '#44aaff';
+  ctx.font = 'bold 28px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`Lateral: ${offset.x >= 0 ? '+' : ''}${offset.x.toFixed(3)} m`, 200, 48);
+  ctx.fillText(`Vertical: ${offset.y >= 0 ? '+' : ''}${offset.y.toFixed(3)} m`, 200, 90);
+  hudTexture.needsUpdate = true;
+}
+drawHUD();
+
+// --- Ray-panel intersection ---
+const raycaster = new THREE.Raycaster();
+const tempMatrix = new THREE.Matrix4();
+let prevSelectState = [false, false];
+
+function getButtonHit(controller) {
+  tempMatrix.identity().extractRotation(controller.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+
+  const hits = raycaster.intersectObject(panelMesh);
+  if (hits.length === 0) return null;
+  const uv = hits[0].uv;
+  if (!uv) return null;
+  // Button regions in UV (0-1)
+  const px = uv.x * 512;
+  const py = (1 - uv.y) * 256;
+  if (py >= 70 && py <= 150) {
+    if (px >= 30 && px <= 240) return 'show';
+    if (px >= 272 && px <= 482) return 'hide';
+  }
+  return null;
+}
+
+// --- WebXR session ---
+const enterBtn = document.getElementById('enterVR');
+
+if (navigator.xr) {
+  navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+    if (supported) {
+      enterBtn.disabled = false;
+      enterBtn.textContent = 'Enter VR';
+    } else {
+      enterBtn.textContent = 'VR Not Supported';
+    }
+  });
+} else {
+  enterBtn.textContent = 'WebXR Not Available';
+}
+
+let xrSession = null;
+let refSpace = null;
+
+enterBtn.addEventListener('click', async () => {
+  if (xrSession) return;
+  try {
+    const session = await navigator.xr.requestSession('immersive-vr', {
+      requiredFeatures: ['hand-tracking'],
+      optionalFeatures: ['local-floor', 'bounded-floor']
+    });
+    xrSession = session;
+    renderer.xr.setSession(session);
+    session.addEventListener('end', () => { xrSession = null; });
+    enterBtn.textContent = 'In VR';
+  } catch (e) {
+    console.error('Failed to start XR session:', e);
+  }
+});
+
+// --- Resize ---
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- Render loop ---
+const _headRight = new THREE.Vector3();
+const _headForward = new THREE.Vector3();
+const _offsetWorld = new THREE.Vector3();
+
+renderer.setAnimationLoop((timestamp, frame) => {
+  if (frame && renderer.xr.isPresenting) {
+    const session = renderer.xr.getSession();
+    refSpace = renderer.xr.getReferenceSpace();
+
+    // Compute head-relative offset: X = user's right, Y = world up
+    const xrCamera = renderer.xr.getCamera();
+    _headForward.set(0, 0, -1).applyQuaternion(xrCamera.quaternion);
+    _headForward.y = 0; // project onto XZ plane
+    _headForward.normalize();
+    // Right vector = cross(forward, up)
+    _headRight.crossVectors(_headForward, new THREE.Vector3(0, 1, 0)).negate().normalize();
+    // Offset in world space: lateral along head-right, vertical along world Y
+    _offsetWorld.set(0, offset.y, 0)
+      .addScaledVector(_headRight, offset.x);
+
+    // --- Process input sources ---
+    let hoveredButton = null;
+
+    for (const source of session.inputSources) {
+      const gp = source.gamepad;
+
+      // Thumbstick offset control (left hand controller)
+      if (gp && source.handedness === 'left' && gp.axes.length >= 4) {
+        const axisX = gp.axes[2]; // left/right
+        const axisY = gp.axes[3]; // up/down (inverted: up = -1)
+        if (Math.abs(axisX) > DEADZONE) {
+          offset.x += axisX * SPEED;
+          offset.x = Math.max(-CLAMP, Math.min(CLAMP, offset.x));
+        }
+        if (Math.abs(axisY) > DEADZONE) {
+          offset.y -= axisY * SPEED; // invert: push up = increase Y
+          offset.y = Math.max(-CLAMP, Math.min(CLAMP, offset.y));
+        }
+        drawHUD();
+      }
+
+      // Ghost hand: manually drive ghost joints from right hand tracking data + offset
+      if (source.hand && source.handedness === 'right') {
+        for (const [jointName, jointSpace] of source.hand) {
+          const jointPose = frame.getJointPose(jointSpace, refSpace);
+          const ghostJoint = ghostHand.joints[jointName];
+          if (jointPose && ghostJoint) {
+            // Set position with head-relative offset applied
+            ghostJoint.position.set(
+              jointPose.transform.position.x + _offsetWorld.x,
+              jointPose.transform.position.y + _offsetWorld.y,
+              jointPose.transform.position.z + _offsetWorld.z
+            );
+            ghostJoint.quaternion.set(
+              jointPose.transform.orientation.x,
+              jointPose.transform.orientation.y,
+              jointPose.transform.orientation.z,
+              jointPose.transform.orientation.w
+            );
+          }
+        }
+      }
+    }
+
+    // --- Controller ray interaction with panel ---
+    for (let ci = 0; ci < 2; ci++) {
+      const ctrl = ci === 0 ? controller0 : controller1;
+      const hit = getButtonHit(ctrl);
+      if (hit) hoveredButton = hit;
+
+      // Check select (trigger)
+      const source = session.inputSources[ci];
+      if (source && source.gamepad) {
+        const triggerPressed = source.gamepad.buttons[0] && source.gamepad.buttons[0].pressed;
+        if (triggerPressed && !prevSelectState[ci] && hit) {
+          if (hit === 'show') realHandVisible = true;
+          if (hit === 'hide') realHandVisible = false;
+        }
+        prevSelectState[ci] = triggerPressed;
+      }
+    }
+
+    // Enforce real right hand visibility every frame (Three.js resets it on reconnect)
+    // Only hide the right hand — leave the left hand alone
+    if (rightHandObj) {
+      rightHandObj.visible = realHandVisible;
+    }
+
+    drawPanel(hoveredButton);
+  }
+
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

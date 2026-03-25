@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Proprioception Experiment</title>
+  <style>
+    body { margin: 0; background: #000; overflow: hidden; }
+    #xr-button {
+      position: absolute; bottom: 30px; left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 24px; font-size: 18px;
+      background: #2266cc; color: white; border: none;
+      border-radius: 8px; cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <button id="xr-button">Enter VR</button>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
+
+    // ─── CONFIG ──────────────────────────────────────────────────────────────
+    const offset = { x: 0.3, y: 0.0, z: 0.0 };
+    const JOYSTICK_SPEED = 0.002;   // metres per frame per unit of stick deflection
+    const OFFSET_MAX = 1.0;         // max offset in any direction (metres)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    document.getElementById('xr-button').addEventListener('click', async () => {
+      if (navigator.xr) {
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          requiredFeatures: ['hand-tracking'],
+          optionalFeatures: ['local-floor', 'bounded-floor']
+        });
+        renderer.xr.setSession(session);
+        document.getElementById('xr-button').style.display = 'none';
+      } else {
+        alert('WebXR not supported on this device/browser.');
+      }
+    });
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+
+    // Floor grid
+    scene.add(new THREE.GridHelper(100, 100, 0x444444, 0x222222));
+
+    // Lighting
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(1, 3, 2);
+    scene.add(dirLight);
+
+    // ─── HUD LABEL ───────────────────────────────────────────────────────────
+    // Floating canvas texture showing current offset
+    const hudCanvas = document.createElement('canvas');
+    hudCanvas.width = 512; hudCanvas.height = 128;
+    const hudCtx = hudCanvas.getContext('2d');
+    const hudTexture = new THREE.CanvasTexture(hudCanvas);
+    const hudMat = new THREE.MeshBasicMaterial({ map: hudTexture, transparent: true, depthTest: false });
+    const hudMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.1), hudMat);
+    scene.add(hudMesh);
+
+    function updateHUD() {
+      hudCtx.clearRect(0, 0, 512, 128);
+      hudCtx.fillStyle = 'rgba(0,0,0,0.5)';
+      hudCtx.roundRect(4, 4, 504, 120, 16);
+      hudCtx.fill();
+      hudCtx.fillStyle = '#ffffff';
+      hudCtx.font = 'bold 36px monospace';
+      hudCtx.textAlign = 'center';
+      hudCtx.fillText(
+        `offset  X: ${offset.x.toFixed(3)}  Y: ${offset.y.toFixed(3)}`,
+        256, 72
+      );
+      hudTexture.needsUpdate = true;
+    }
+    updateHUD();
+
+    // ─── HANDS ───────────────────────────────────────────────────────────────
+    const handModelFactory = new XRHandModelFactory();
+
+    const realRightHand = renderer.xr.getHand(1);
+    scene.add(realRightHand);
+    const realRightModel = handModelFactory.createHandModel(realRightHand, 'mesh');
+    realRightHand.add(realRightModel);
+    realRightModel.visible = false;
+
+    const jointMaterial = new THREE.MeshStandardMaterial({ color: 0x44aaff, roughness: 0.4 });
+    const jointGeometry = new THREE.SphereGeometry(0.008, 8, 8);
+
+    const JOINT_NAMES = [
+      'wrist',
+      'thumb-metacarpal','thumb-phalanx-proximal','thumb-phalanx-distal','thumb-tip',
+      'index-finger-metacarpal','index-finger-phalanx-proximal','index-finger-phalanx-intermediate','index-finger-phalanx-distal','index-finger-tip',
+      'middle-finger-metacarpal','middle-finger-phalanx-proximal','middle-finger-phalanx-intermediate','middle-finger-phalanx-distal','middle-finger-tip',
+      'ring-finger-metacarpal','ring-finger-phalanx-proximal','ring-finger-phalanx-intermediate','ring-finger-phalanx-distal','ring-finger-tip',
+      'pinky-finger-metacarpal','pinky-finger-phalanx-proximal','pinky-finger-phalanx-intermediate','pinky-finger-phalanx-distal','pinky-finger-tip'
+    ];
+
+    const ghostJoints = {};
+    for (const name of JOINT_NAMES) {
+      const mesh = new THREE.Mesh(jointGeometry, jointMaterial);
+      mesh.visible = false;
+      scene.add(mesh);
+      ghostJoints[name] = mesh;
+    }
+
+    // ─── RENDER LOOP ─────────────────────────────────────────────────────────
+    renderer.setAnimationLoop((timestamp, frame) => {
+      if (frame) {
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        const session = renderer.xr.getSession();
+
+        if (session) {
+          // — Joystick input (left controller thumbstick) —
+          let hudDirty = false;
+          for (const source of session.inputSources) {
+            if (source.handedness === 'left' && source.gamepad) {
+              const axes = source.gamepad.axes;
+              // axes[2] = left stick X, axes[3] = left stick Y (Quest layout)
+              if (Math.abs(axes[2]) > 0.1) {
+                offset.x = THREE.MathUtils.clamp(
+                  offset.x + axes[2] * JOYSTICK_SPEED, -OFFSET_MAX, OFFSET_MAX
+                );
+                hudDirty = true;
+              }
+              if (Math.abs(axes[3]) > 0.1) {
+                offset.y = THREE.MathUtils.clamp(
+                  offset.y - axes[3] * JOYSTICK_SPEED, -OFFSET_MAX, OFFSET_MAX
+                );
+                hudDirty = true;
+              }
+            }
+          }
+          if (hudDirty) updateHUD();
+
+          // — Position HUD in front of camera —
+          const camPos = new THREE.Vector3();
+          const camQuat = new THREE.Quaternion();
+          camera.getWorldPosition(camPos);
+          camera.getWorldQuaternion(camQuat);
+          const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camQuat);
+          hudMesh.position.copy(camPos).addScaledVector(forward, 1.2);
+          hudMesh.position.y += 0.3;
+          hudMesh.quaternion.copy(camQuat);
+
+          // — Ghost hand joints —
+          for (const source of session.inputSources) {
+            if (source.hand && source.handedness === 'right') {
+              for (const jointName of JOINT_NAMES) {
+                const jointSpace = source.hand.get(jointName);
+                if (jointSpace) {
+                  const pose = frame.getJointPose(jointSpace, referenceSpace);
+                  if (pose) {
+                    const m = ghostJoints[jointName];
+                    m.visible = true;
+                    m.position.set(
+                      pose.transform.position.x - offset.x,
+                      pose.transform.position.y + offset.y,
+                      pose.transform.position.z + offset.z
+                    );
+                    m.quaternion.set(
+                      pose.transform.orientation.x,
+                      pose.transform.orientation.y,
+                      pose.transform.orientation.z,
+                      pose.transform.orientation.w
+                    );
+                  } else {
+                    ghostJoints[jointName].visible = false;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      renderer.render(scene, camera);
+    });
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
