@@ -40,8 +40,7 @@ const BOUNCE = 0.3;               // coefficient of restitution
 const FRICTION = 0.92;            // velocity damping per frame on contact
 const BOX_COLORS = [0xff4466, 0x44aaff, 0x44ff88, 0xffaa44, 0xdd44ff, 0xffff44];
 const PLANE_COLOR = 0x44aaff;
-const MESH_COLOR = 0x88ff88;
-const SCENE_OPACITY = 0.15;       // transparency of detected scene geometry
+const SCENE_OPACITY = 0.15;       // transparency of detected plane geometry
 const DROP_COOLDOWN = 300;        // ms between drops per controller
 // ============================================================
 
@@ -93,7 +92,6 @@ controller1.add(makeRayLine());
 // --- Scene geometry tracking ---
 // Maps from XRPlane/XRMesh to Three.js mesh for updates
 const planeMap = new Map();
-const meshMap = new Map();
 
 const planeMaterial = new THREE.MeshStandardMaterial({
   color: PLANE_COLOR,
@@ -105,16 +103,6 @@ const planeMaterial = new THREE.MeshStandardMaterial({
   metalness: 0.0
 });
 
-const meshMaterial = new THREE.MeshStandardMaterial({
-  color: MESH_COLOR,
-  transparent: true,
-  opacity: SCENE_OPACITY,
-  side: THREE.DoubleSide,
-  depthWrite: false,
-  wireframe: false,
-  roughness: 0.8,
-  metalness: 0.0
-});
 
 function updatePlanes(frame, refSpace) {
   if (!frame.detectedPlanes) return;
@@ -170,60 +158,6 @@ function updatePlanes(frame, refSpace) {
   }
 }
 
-function updateMeshes(frame, refSpace) {
-  if (!frame.detectedMeshes) return;
-
-  const currentMeshes = frame.detectedMeshes;
-
-  // Remove meshes no longer detected
-  for (const [xrMesh, obj] of meshMap) {
-    if (!currentMeshes.has(xrMesh)) {
-      scene.remove(obj);
-      obj.geometry.dispose();
-      meshMap.delete(xrMesh);
-    }
-  }
-
-  // Add/update detected meshes
-  for (const xrMesh of currentMeshes) {
-    let obj = meshMap.get(xrMesh);
-
-    if (!obj || xrMesh.lastChangedTime > (obj.userData.lastChanged || 0)) {
-      // Create or recreate geometry
-      if (obj) {
-        scene.remove(obj);
-        obj.geometry.dispose();
-      }
-
-      const vertices = xrMesh.vertices;
-      const indices = xrMesh.indices;
-      if (!vertices || !indices || vertices.length === 0) continue;
-
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
-      geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
-      geo.computeVertexNormals();
-
-      obj = new THREE.Mesh(geo, meshMaterial.clone());
-      obj.renderOrder = -1;
-      obj.matrixAutoUpdate = false;
-
-      obj.userData.isSceneGeometry = true;
-      obj.userData.xrMesh = xrMesh;
-      obj.userData.lastChanged = xrMesh.lastChangedTime;
-      obj.userData.semanticLabel = xrMesh.semanticLabel || '';
-
-      scene.add(obj);
-      meshMap.set(xrMesh, obj);
-    }
-
-    // Update transform
-    const pose = frame.getPose(xrMesh.meshSpace, refSpace);
-    if (pose) {
-      obj.matrix.fromArray(pose.transform.matrix);
-    }
-  }
-}
 
 // --- Dropped boxes with simple physics ---
 const droppedBoxes = []; // { mesh, vel, settled }
@@ -265,7 +199,10 @@ function spawnBox(position) {
 function getSceneColliders() {
   const colliders = [];
   for (const [, obj] of planeMap) colliders.push(obj);
-  for (const [, obj] of meshMap) colliders.push(obj);
+  // Dropped boxes also act as colliders (stack on each other)
+  for (const box of droppedBoxes) {
+    if (box.settled) colliders.push(box.mesh);
+  }
   return colliders;
 }
 
@@ -367,11 +304,10 @@ function drawHUD() {
   ctx.fillStyle = '#fff';
   ctx.font = '18px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(`Planes: ${planeMap.size}  Meshes: ${meshMap.size}`, 200, 30);
-  ctx.fillText(`Boxes: ${droppedBoxes.length}`, 200, 55);
+  ctx.fillText(`Planes: ${planeMap.size}  |  Boxes: ${droppedBoxes.length}`, 200, 30);
   ctx.fillStyle = '#aaa';
   ctx.font = '14px sans-serif';
-  ctx.fillText('Pull trigger to drop a box', 200, 85);
+  ctx.fillText('Pull trigger to drop a box', 200, 60);
 
   hudTexture.needsUpdate = true;
 }
@@ -403,7 +339,6 @@ enterBtn.addEventListener('click', async () => {
       requiredFeatures: ['local-floor'],
       optionalFeatures: [
         'plane-detection',
-        'mesh-detection',
         'anchors',
         'hand-tracking',
         'hit-test'
@@ -449,7 +384,6 @@ renderer.setAnimationLoop((timestamp, frame) => {
 
     // Update scene geometry
     updatePlanes(frame, refSpace);
-    updateMeshes(frame, refSpace);
 
     // Controller input: drop boxes on trigger
     for (let ci = 0; ci < 2; ci++) {
