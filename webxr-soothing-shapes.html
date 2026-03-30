@@ -466,6 +466,12 @@ enterBtn.addEventListener('click', async () => {
       optionalFeatures: ['hand-tracking', 'local-floor', 'bounded-floor']
     });
     xrSession = session;
+    const gl = renderer.getContext();
+    const glLayer = new XRWebGLLayer(session, gl, {
+      framebufferScaleFactor: XRWebGLLayer.getNativeFramebufferScaleFactor(session),
+      antialias: true,
+    });
+    session.updateRenderState({ baseLayer: glLayer });
     renderer.xr.setSession(session);
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     session.addEventListener('end', () => { xrSession = null; });

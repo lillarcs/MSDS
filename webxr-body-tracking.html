@@ -113,6 +113,31 @@ const MIXAMO_TO_XR = {
 const XR_TO_MIXAMO = {};
 for (const [mix, xr] of Object.entries(MIXAMO_TO_XR)) XR_TO_MIXAMO[xr] = mix;
 
+// Process order: parents MUST come before children so getWorldQuaternion() is correct
+const BONE_ORDER_XR = [
+  // Spine chain
+  'hips', 'spine-lower', 'spine-middle', 'spine-upper', 'neck', 'head',
+  // Left arm chain
+  'left-shoulder', 'left-arm-upper', 'left-arm-lower', 'left-hand-wrist',
+  // Left hand fingers (proximal → distal)
+  'left-hand-thumb-metacarpal',    'left-hand-thumb-phalanx-proximal',    'left-hand-thumb-phalanx-distal',
+  'left-hand-index-phalanx-proximal',  'left-hand-index-phalanx-intermediate',  'left-hand-index-phalanx-distal',
+  'left-hand-middle-phalanx-proximal', 'left-hand-middle-phalanx-intermediate', 'left-hand-middle-phalanx-distal',
+  'left-hand-ring-phalanx-proximal',   'left-hand-ring-phalanx-intermediate',   'left-hand-ring-phalanx-distal',
+  'left-hand-little-phalanx-proximal', 'left-hand-little-phalanx-intermediate', 'left-hand-little-phalanx-distal',
+  // Right arm chain
+  'right-shoulder', 'right-arm-upper', 'right-arm-lower', 'right-hand-wrist',
+  // Right hand fingers
+  'right-hand-thumb-metacarpal',    'right-hand-thumb-phalanx-proximal',    'right-hand-thumb-phalanx-distal',
+  'right-hand-index-phalanx-proximal',  'right-hand-index-phalanx-intermediate',  'right-hand-index-phalanx-distal',
+  'right-hand-middle-phalanx-proximal', 'right-hand-middle-phalanx-intermediate', 'right-hand-middle-phalanx-distal',
+  'right-hand-ring-phalanx-proximal',   'right-hand-ring-phalanx-intermediate',   'right-hand-ring-phalanx-distal',
+  'right-hand-little-phalanx-proximal', 'right-hand-little-phalanx-intermediate', 'right-hand-little-phalanx-distal',
+  // Leg chains
+  'left-upper-leg',  'left-lower-leg',  'left-foot-ankle',  'left-foot-ball',
+  'right-upper-leg', 'right-lower-leg', 'right-foot-ankle', 'right-foot-ball',
+];
+
 // --- Scene ---
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x111111);
@@ -157,10 +182,8 @@ const ft = 0.04;
 let soldierModel = null;
 let soldierSkeleton = null;
 let bonesByXRJoint = {};       // xr joint name → THREE.Bone
-let boneRestQuats = {};        // xr joint name → rest quaternion (inverse)
 let mirrorModel = null;
 let mirrorBonesByXRJoint = {};
-let mirrorBoneRestQuats = {};
 
 const loader = new GLTFLoader();
 loader.load(SOLDIER_URL, (gltf) => {
@@ -184,8 +207,6 @@ loader.load(SOLDIER_URL, (gltf) => {
       const xrName = MIXAMO_TO_XR[child.name];
       if (xrName) {
         bonesByXRJoint[xrName] = child;
-        // Store the inverse rest quaternion for relative rotation
-        boneRestQuats[xrName] = child.quaternion.clone();
       }
     }
   });
@@ -202,7 +223,6 @@ loader.load(SOLDIER_URL, (gltf) => {
       const xrName = MIXAMO_TO_XR[child.name];
       if (xrName) {
         mirrorBonesByXRJoint[xrName] = child;
-        mirrorBoneRestQuats[xrName] = child.quaternion.clone();
       }
     }
     if (child.isSkinnedMesh) {
@@ -219,10 +239,34 @@ loader.load(SOLDIER_URL, (gltf) => {
 });
 
 // --- Body tracking state ---
-const _pos = new THREE.Vector3();
-const _quat = new THREE.Quaternion();
-const _worldQuat = new THREE.Quaternion();
-let hipsOffset = new THREE.Vector3(); // offset to position model at tracked hips
+const _parentInvQ = new THREE.Quaternion();
+const _xrQ = new THREE.Quaternion();
+
+// Drive skeleton bones in strict parent-first order.
+// After each bone, updateWorldMatrix() so children read the correct parent transform.
+function driveSkeleton(bonesMap, body, frame, refSpace) {
+  for (const xrJoint of BONE_ORDER_XR) {
+    const bone = bonesMap[xrJoint];
+    if (!bone) continue;
+
+    const jointSpace = body.get(xrJoint);
+    if (!jointSpace) continue;
+    const pose = frame.getPose(jointSpace, refSpace);
+    if (!pose) continue;
+
+    const q = pose.transform.orientation;
+    _xrQ.set(q.x, q.y, q.z, q.w);
+
+    // bone.localQuat = parentWorldQuat⁻¹ × xrWorldQuat
+    // parent's world matrix is already up-to-date because we process top-down.
+    bone.parent.getWorldQuaternion(_parentInvQ);
+    _parentInvQ.invert();
+    bone.quaternion.copy(_parentInvQ).multiply(_xrQ);
+
+    // Propagate to this bone's world matrix so its children can read it.
+    bone.updateWorldMatrix(false, false);
+  }
+}
 
 function updateSoldierFromBody(frame, refSpace) {
   const body = frame.body;
@@ -234,61 +278,34 @@ function updateSoldierFromBody(frame, refSpace) {
 
   soldierModel.visible = true;
 
-  // Get hips pose to position the whole model
+  // Position model so hips end up at the tracked hips height
   const hipsSpace = body.get('hips');
   if (hipsSpace) {
     const hipsPose = frame.getPose(hipsSpace, refSpace);
     if (hipsPose) {
       const hp = hipsPose.transform.position;
-      soldierModel.position.set(hp.x, hp.y, hp.z);
-      // Offset model down so feet touch ground (soldier model origin is at feet)
-      // The hips joint is roughly at ~0.95m on the model, so offset by that
-      soldierModel.position.y = hp.y - 0.95;
+      // 0.95 ≈ height of mixamorigHips bone above model origin (feet)
+      soldierModel.position.set(hp.x, hp.y - 0.95, hp.z);
     }
   }
 
-  // Drive each mapped bone with XR joint rotation
-  for (const [xrJoint, bone] of Object.entries(bonesByXRJoint)) {
-    const jointSpace = body.get(xrJoint);
-    if (!jointSpace) continue;
-    const pose = frame.getPose(jointSpace, refSpace);
-    if (!pose) continue;
+  // Keep the GLTF root rotation (GLTFLoader may bake in a Z-up→Y-up correction).
+  soldierModel.updateWorldMatrix(false, false); // propagate new position to world matrix
 
-    const q = pose.transform.orientation;
-    _worldQuat.set(q.x, q.y, q.z, q.w);
+  driveSkeleton(bonesByXRJoint, body, frame, refSpace);
 
-    // Convert world quaternion to local bone space
-    if (bone.parent && bone.parent.isBone) {
-      const parentWorld = new THREE.Quaternion();
-      bone.parent.getWorldQuaternion(parentWorld);
-      parentWorld.invert();
-      _quat.copy(parentWorld).multiply(_worldQuat);
-    } else {
-      _quat.copy(_worldQuat);
-    }
-
-    bone.quaternion.copy(_quat);
-  }
-
-  // --- Update mirror model ---
+  // --- Mirror model ---
   if (mirrorModel) {
     mirrorModel.visible = true;
-    // Mirror position across MIRROR_Z
     mirrorModel.position.set(
       soldierModel.position.x,
       soldierModel.position.y,
       2 * MIRROR_Z - soldierModel.position.z
     );
-    // Flip Z scale for mirror reflection
     mirrorModel.scale.set(1, 1, -1);
+    mirrorModel.updateWorldMatrix(false, false);
 
-    // Copy bone rotations from main to mirror
-    for (const [xrJoint, bone] of Object.entries(bonesByXRJoint)) {
-      const mirrorBone = mirrorBonesByXRJoint[xrJoint];
-      if (mirrorBone) {
-        mirrorBone.quaternion.copy(bone.quaternion);
-      }
-    }
+    driveSkeleton(mirrorBonesByXRJoint, body, frame, refSpace);
   }
 
   return true;
@@ -362,6 +379,12 @@ enterBtn.addEventListener('click', async () => {
       optionalFeatures: ['body-tracking', 'local-floor', 'bounded-floor', 'hand-tracking']
     });
     xrSession = session;
+    const gl = renderer.getContext();
+    const glLayer = new XRWebGLLayer(session, gl, {
+      framebufferScaleFactor: XRWebGLLayer.getNativeFramebufferScaleFactor(session),
+      antialias: true,
+    });
+    session.updateRenderState({ baseLayer: glLayer });
     renderer.xr.setSession(session);
     session.addEventListener('end', () => { xrSession = null; });
     enterBtn.textContent = 'In VR';

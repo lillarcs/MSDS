@@ -345,6 +345,12 @@ enterBtn.addEventListener('click', async () => {
       ]
     });
     xrSession = session;
+    const gl = renderer.getContext();
+    const glLayer = new XRWebGLLayer(session, gl, {
+      framebufferScaleFactor: XRWebGLLayer.getNativeFramebufferScaleFactor(session),
+      antialias: true,
+    });
+    session.updateRenderState({ baseLayer: glLayer });
     renderer.xr.setSession(session);
 
     session.addEventListener('end', () => { xrSession = null; });
