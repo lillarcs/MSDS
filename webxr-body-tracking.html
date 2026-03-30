@@ -35,7 +35,6 @@
 
 <script type="module">
 import * as THREE from 'three';
-import { Reflector } from 'three/addons/objects/Reflector.js';
 
 // ============================================================
 // BODY JOINT NAMES (70 core joints, excluding detailed hand fingers for mesh)
@@ -172,31 +171,39 @@ scene.add(dirLight);
 
 scene.add(new THREE.GridHelper(20, 40, 0x333333, 0x222222));
 
-// --- Mirror (real reflective surface using Reflector) ---
-const mirrorDist = 2.0;
-const mirror = new Reflector(new THREE.PlaneGeometry(2, 2.5), {
-  color: 0x889999,
-  textureWidth: 1024,
-  textureHeight: 1024,
-  clipBias: 0.003
-});
-mirror.position.set(0, 1.25, -mirrorDist);
-scene.add(mirror);
+// --- Mirror (clone-based, works in stereo VR) ---
+// The mirror surface is a semi-transparent plane.
+// Behind it, a mirrored clone of the body is rendered at the reflected position.
+const MIRROR_Z = -2.0; // z position of the mirror surface
 
-// Frame around the mirror
+// Mirror surface
+const mirrorSurface = new THREE.Mesh(
+  new THREE.PlaneGeometry(2, 2.5),
+  new THREE.MeshStandardMaterial({
+    color: 0x667788,
+    roughness: 0.05,
+    metalness: 0.9,
+    transparent: true,
+    opacity: 0.15,
+    side: THREE.DoubleSide
+  })
+);
+mirrorSurface.position.set(0, 1.25, MIRROR_Z);
+scene.add(mirrorSurface);
+
+// Frame
 const frameMat = new THREE.MeshStandardMaterial({ color: 0x333344, roughness: 0.5, metalness: 0.3 });
-const frameTop = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.05, 0.05), frameMat);
-frameTop.position.set(0, 2.5 + 0.025, -mirrorDist);
-scene.add(frameTop);
-const frameBot = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.05, 0.05), frameMat);
-frameBot.position.set(0, 0.0 - 0.025, -mirrorDist);
-scene.add(frameBot);
-const frameLeft = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.6, 0.05), frameMat);
-frameLeft.position.set(-1.025, 1.25, -mirrorDist);
-scene.add(frameLeft);
-const frameRight = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.6, 0.05), frameMat);
-frameRight.position.set(1.025, 1.25, -mirrorDist);
-scene.add(frameRight);
+const frameThick = 0.04;
+[
+  [0, 2.5 + frameThick / 2, 2.08, frameThick],   // top
+  [0, 0.0 - frameThick / 2, 2.08, frameThick],   // bottom
+  [-1.04, 1.25, frameThick, 2.58],                 // left
+  [1.04, 1.25, frameThick, 2.58],                  // right
+].forEach(([x, y, w, h]) => {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, frameThick), frameMat);
+  m.position.set(x, y, MIRROR_Z);
+  scene.add(m);
+});
 
 // --- Body mesh: joints as spheres, bones as cylinders ---
 const bodyMaterial = new THREE.MeshStandardMaterial({
@@ -287,6 +294,121 @@ for (const [from, to, radius] of SKIN_BONES) {
 const headMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), skinMaterial);
 headMesh.visible = false;
 scene.add(headMesh);
+
+// --- Mirrored body clone (rendered behind mirror surface) ---
+const mirrorGroup = new THREE.Group();
+scene.add(mirrorGroup);
+
+const mirrorBodyMat = new THREE.MeshStandardMaterial({
+  color: 0x44aaff, roughness: 0.5, metalness: 0.1, transparent: true, opacity: 0.75
+});
+const mirrorSkinMat = new THREE.MeshStandardMaterial({
+  color: 0xddaa88, roughness: 0.6, metalness: 0.0, transparent: true, opacity: 0.6, side: THREE.DoubleSide
+});
+
+const mirrorJointMeshes = {};
+for (const jointName of BODY_JOINTS) {
+  const r = JOINT_RADII[jointName] || 0.015;
+  const mesh = new THREE.Mesh(getSphereGeo(r), mirrorBodyMat);
+  mesh.visible = false;
+  mirrorGroup.add(mesh);
+  mirrorJointMeshes[jointName] = mesh;
+}
+
+const mirrorBoneMeshes = [];
+for (const [parentName, childName] of BONE_CONNECTIONS) {
+  const r = boneRadius(parentName, childName);
+  const mesh = new THREE.Mesh(cylGeo, mirrorBodyMat);
+  mesh.visible = false;
+  mesh.userData.parent = parentName;
+  mesh.userData.child = childName;
+  mesh.userData.radius = r;
+  mirrorGroup.add(mesh);
+  mirrorBoneMeshes.push(mesh);
+}
+
+const mirrorSkinSegments = [];
+for (const [from, to, radius] of SKIN_BONES) {
+  const mesh = new THREE.Mesh(capsuleGeo, mirrorSkinMat);
+  mesh.visible = false;
+  mesh.userData.from = from;
+  mesh.userData.to = to;
+  mesh.userData.radius = radius;
+  mirrorGroup.add(mesh);
+  mirrorSkinSegments.push(mesh);
+}
+
+const mirrorHeadMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), mirrorSkinMat);
+mirrorHeadMesh.visible = false;
+mirrorGroup.add(mirrorHeadMesh);
+
+function mirrorPos(pos) {
+  return new THREE.Vector3(pos.x, pos.y, 2 * MIRROR_Z - pos.z);
+}
+
+function updateMirrorBody() {
+  const _mDir = new THREE.Vector3();
+  const _mUp = new THREE.Vector3(0, 1, 0);
+
+  for (const jointName of BODY_JOINTS) {
+    const real = jointMeshes[jointName];
+    const m = mirrorJointMeshes[jointName];
+    if (real && real.visible) {
+      m.visible = true;
+      m.position.copy(mirrorPos(real.position));
+    } else {
+      m.visible = false;
+    }
+  }
+
+  for (let i = 0; i < boneMeshes.length; i++) {
+    const real = boneMeshes[i];
+    const m = mirrorBoneMeshes[i];
+    const pPos = jointPositions[real.userData.parent];
+    const cPos = jointPositions[real.userData.child];
+    if (real.visible && pPos && cPos) {
+      const mp = mirrorPos(pPos);
+      const mc = mirrorPos(cPos);
+      _mDir.copy(mc).sub(mp);
+      const len = _mDir.length();
+      if (len < 0.001) { m.visible = false; continue; }
+      m.visible = true;
+      m.position.copy(mp);
+      m.scale.set(real.userData.radius, len, real.userData.radius);
+      m.quaternion.setFromUnitVectors(_mUp, _mDir.normalize());
+    } else {
+      m.visible = false;
+    }
+  }
+
+  for (let i = 0; i < skinSegments.length; i++) {
+    const real = skinSegments[i];
+    const m = mirrorSkinSegments[i];
+    const fPos = jointPositions[real.userData.from];
+    const tPos = jointPositions[real.userData.to];
+    if (real.visible && fPos && tPos) {
+      const mf = mirrorPos(fPos);
+      const mt = mirrorPos(tPos);
+      _mDir.copy(mt).sub(mf);
+      const len = _mDir.length();
+      if (len < 0.001) { m.visible = false; continue; }
+      m.visible = true;
+      m.position.addVectors(mf, mt).multiplyScalar(0.5);
+      m.scale.set(real.userData.radius, len / 2, real.userData.radius);
+      m.quaternion.setFromUnitVectors(_mUp, _mDir.normalize());
+    } else {
+      m.visible = false;
+    }
+  }
+
+  if (headMesh.visible) {
+    mirrorHeadMesh.visible = true;
+    mirrorHeadMesh.position.copy(mirrorPos(headMesh.position));
+    mirrorHeadMesh.scale.copy(headMesh.scale);
+  } else {
+    mirrorHeadMesh.visible = false;
+  }
+}
 
 // --- Joint position cache ---
 const jointPositions = {};
@@ -459,6 +581,7 @@ renderer.setAnimationLoop((timestamp, frame) => {
     refSpace = renderer.xr.getReferenceSpace();
 
     const hasBody = updateBodyFromFrame(frame, refSpace);
+    if (hasBody) updateMirrorBody();
 
     // Count tracked joints
     trackedJointCount = 0;
