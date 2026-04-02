@@ -207,10 +207,7 @@
       material="opacity:0.35; transparent:true; shader:flat; emissive:#ffffff; emissiveIntensity:0.3"
       segments-radial="32" segments-tubular="8">
     </a-torus>
-    <a-text value="Dense Undergrowth" align="center" color="#ccccbb"
-      width="3.5" position="0 0.6 0" look-at="#player-camera"
-      material="shader:flat">
-    </a-text>
+    <a-entity position="0 1.5 0" spot-label="value: Dense Undergrowth"></a-entity>
     <!-- Layered dark bushes -->
     <a-entity bush-patch="size:2.6; color:#060e06"></a-entity>
     <a-entity position=" 0.9 0 -0.5" bush-patch="size:2.1; color:#040c06"></a-entity>
@@ -258,10 +255,7 @@
       material="opacity:0.35; transparent:true; shader:flat; emissive:#ffffff; emissiveIntensity:0.3"
       segments-radial="32" segments-tubular="8">
     </a-torus>
-    <a-text value="River Bank" align="center" color="#ccccbb"
-      width="3.5" position="0 0.6 0" look-at="#player-camera"
-      material="shader:flat">
-    </a-text>
+    <a-entity position="0 1.5 0" spot-label="value: River Bank"></a-entity>
     <!-- Dense reeds -->
     <a-entity reed-patch="count:22; spread:1.9; color:#153a12"></a-entity>
     <!-- Willow-like drooping plants -->
@@ -293,10 +287,7 @@
       material="opacity:0.35; transparent:true; shader:flat; emissive:#ffffff; emissiveIntensity:0.3"
       segments-radial="32" segments-tubular="8">
     </a-torus>
-    <a-text value="Rocky Gully" align="center" color="#ccccbb"
-      width="3.5" position="0 0.6 0" look-at="#player-camera"
-      material="shader:flat">
-    </a-text>
+    <a-entity position="0 1.5 0" spot-label="value: Rocky Gully"></a-entity>
     <!-- Large boulders in cluster with natural gaps -->
     <a-sphere radius="1.1"  color="#1c1c16" material="roughness:1" position=" 0    0.7   0"    scale="1.3 0.95 1.1" cast-shadow receive-shadow></a-sphere>
     <a-sphere radius="0.9"  color="#181810" material="roughness:1" position=" 1.5  0.6   0.5"  scale="1.1 0.9  1.2" cast-shadow receive-shadow></a-sphere>
@@ -334,10 +325,7 @@
       material="opacity:0.35; transparent:true; shader:flat; emissive:#ffffff; emissiveIntensity:0.3"
       segments-radial="32" segments-tubular="8">
     </a-torus>
-    <a-text value="Narrow Corridor" align="center" color="#ccccbb"
-      width="3.5" position="0 0.6 0" look-at="#player-camera"
-      material="shader:flat">
-    </a-text>
+    <a-entity position="0 1.5 0" spot-label="value: Narrow Corridor"></a-entity>
     <!-- Left wall -->
     <a-entity position="-1.25 0  3"    bush-patch="size:2.1; color:#071a07"></a-entity>
     <a-entity position="-1.25 0  1.5"  bush-patch="size:2.1; color:#051408"></a-entity>
@@ -375,10 +363,7 @@
       material="opacity:0.35; transparent:true; shader:flat; emissive:#ffffff; emissiveIntensity:0.3"
       segments-radial="32" segments-tubular="8">
     </a-torus>
-    <a-text value="Open Forest Floor" align="center" color="#ccccbb"
-      width="3.5" position="0 0.6 0" look-at="#player-camera"
-      material="shader:flat">
-    </a-text>
+    <a-entity position="0 1.5 0" spot-label="value: Open Forest Floor"></a-entity>
     <!-- Only sparse, inadequate cover -->
     <a-entity ground-cover="count:7; spread:1.6; color:#283c18; size:0.28"></a-entity>
     <a-sphere radius="0.22" color="#2c2c20" material="roughness:1" position=" 0.9 0.14  0.5"></a-sphere>
@@ -403,10 +388,7 @@
       material="opacity:0.35; transparent:true; shader:flat; emissive:#ffffff; emissiveIntensity:0.3"
       segments-radial="32" segments-tubular="8">
     </a-torus>
-    <a-text value="Mountain Rocks" align="center" color="#ccccbb"
-      width="3.5" position="0 0.6 0" look-at="#player-camera"
-      material="shader:flat">
-    </a-text>
+    <a-entity position="0 1.5 0" spot-label="value: Mountain Rocks"></a-entity>
     <!-- Cliff face: large dark slabs -->
     <a-sphere radius="2.2"  color="#181814" material="roughness:1" position=" 0    1.5   -1.5" scale="1.8 1.4 0.7" cast-shadow receive-shadow></a-sphere>
     <a-sphere radius="1.8"  color="#141412" material="roughness:1" position=" 2.2  1.2   -1.8" scale="1.4 1.2 0.6" cast-shadow receive-shadow></a-sphere>
@@ -1039,6 +1021,65 @@ AFRAME.registerComponent('firefly', {
     this.el.object3D.position.x += Math.sin(t * 1.2)  * 0.0024;
     this.el.object3D.position.y += Math.sin(t)         * 0.0030;
     this.el.object3D.position.z += Math.cos(t * 0.85)  * 0.0024;
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
+   SPOT LABEL
+   Floating billboard tag above each hiding spot.
+   — Always faces the camera (billboard tick)
+   — Renders on top of all geometry (depthTest/depthWrite false, renderOrder 999)
+   — Dark background panel + white text for legibility
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('spot-label', {
+  schema: { value: { type: 'string', default: '' } },
+  init() {
+    this._depthFixed = false;
+
+    // Background panel
+    const bg = document.createElement('a-plane');
+    bg.setAttribute('width',    '4.4');
+    bg.setAttribute('height',   '0.72');
+    bg.setAttribute('color',    '#000000');
+    bg.setAttribute('material', 'opacity:0.62; transparent:true; shader:flat');
+    bg.setAttribute('position', '0 0 -0.01');
+    this.el.appendChild(bg);
+
+    // Text on top of panel
+    const txt = document.createElement('a-text');
+    txt.setAttribute('value',      this.data.value);
+    txt.setAttribute('align',      'center');
+    txt.setAttribute('color',      '#ffffff');
+    txt.setAttribute('width',      '9');
+    txt.setAttribute('wrap-count', '22');
+    txt.setAttribute('position',   '0 0 0.02');
+    this.el.appendChild(txt);
+  },
+  _fixDepth() {
+    let found = false;
+    this.el.object3D.traverse(obj => {
+      if (obj.material) {
+        obj.material.depthTest  = false;
+        obj.material.depthWrite = false;
+        obj.renderOrder         = 999;
+        obj.material.needsUpdate = true;
+        found = true;
+      }
+    });
+    if (found) this._depthFixed = true;
+  },
+  tick() {
+    // Fix depth on first frame materials are available
+    if (!this._depthFixed) this._fixDepth();
+
+    // Billboard — face camera every frame
+    const cam = document.getElementById('player-camera');
+    if (!cam) return;
+    const camPos = new THREE.Vector3();
+    cam.object3D.getWorldPosition(camPos);
+    const myPos = new THREE.Vector3();
+    this.el.object3D.getWorldPosition(myPos);
+    this.el.object3D.lookAt(camPos.x, myPos.y, camPos.z); // stay upright
   }
 });
 
