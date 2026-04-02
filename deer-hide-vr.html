@@ -42,6 +42,9 @@
     <a-camera id="player-camera" position="0 1.6 0"
       wasd-controls="enabled: true; acceleration: 5"
       look-controls="pointerLockEnabled: false">
+      <a-cursor id="cursor" color="#ffee88" opacity="0.8"
+        raycaster="objects: .clickable; far: 8">
+      </a-cursor>
     </a-camera>
     <a-entity id="left-controller"
       oculus-touch-controls="hand: left; model: false"
@@ -190,6 +193,13 @@
   <a-entity id="spot1"
     hiding-spot="score:5; label:Dense Undergrowth; radius:2; spotId:1"
     position="-7 0 -13">
+    <!-- Score ring: bright green = best hiding spot -->
+    <a-torus radius="2.0" radius-tubular="0.06"
+      rotation="90 0 0" position="0 0.05 0"
+      color="#22ff44"
+      material="opacity:0.55; transparent:true; shader:flat; emissive:#22ff44; emissiveIntensity:0.5"
+      segments-radial="32" segments-tubular="8">
+    </a-torus>
     <!-- Layered dark bushes -->
     <a-entity bush-patch="size:2.6; color:#060e06"></a-entity>
     <a-entity position=" 0.9 0 -0.5" bush-patch="size:2.1; color:#040c06"></a-entity>
@@ -230,6 +240,13 @@
   <a-entity id="spot2"
     hiding-spot="score:4; label:River Bank; radius:2.2; spotId:2"
     position="3.5 0 -14">
+    <!-- Score ring: lime green = good hiding spot -->
+    <a-torus radius="2.2" radius-tubular="0.06"
+      rotation="90 0 0" position="0 0.05 0"
+      color="#88ee22"
+      material="opacity:0.55; transparent:true; shader:flat; emissive:#88ee22; emissiveIntensity:0.5"
+      segments-radial="32" segments-tubular="8">
+    </a-torus>
     <!-- Dense reeds -->
     <a-entity reed-patch="count:22; spread:1.9; color:#153a12"></a-entity>
     <!-- Willow-like drooping plants -->
@@ -254,6 +271,13 @@
   <a-entity id="spot3"
     hiding-spot="score:3; label:Rocky Gully; radius:2.2; spotId:3"
     position="9 0 -10">
+    <!-- Score ring: yellow = risky hiding spot -->
+    <a-torus radius="2.2" radius-tubular="0.06"
+      rotation="90 0 0" position="0 0.05 0"
+      color="#ffdd22"
+      material="opacity:0.55; transparent:true; shader:flat; emissive:#ffdd22; emissiveIntensity:0.5"
+      segments-radial="32" segments-tubular="8">
+    </a-torus>
     <!-- Large boulders in cluster with natural gaps -->
     <a-sphere radius="1.1"  color="#1c1c16" material="roughness:1" position=" 0    0.7   0"    scale="1.3 0.95 1.1" cast-shadow receive-shadow></a-sphere>
     <a-sphere radius="0.9"  color="#181810" material="roughness:1" position=" 1.5  0.6   0.5"  scale="1.1 0.9  1.2" cast-shadow receive-shadow></a-sphere>
@@ -284,6 +308,13 @@
   <a-entity id="spot4"
     hiding-spot="score:2; label:Narrow Corridor; radius:1.8; spotId:4"
     position="-4 0 -9">
+    <!-- Score ring: orange = poor hiding spot -->
+    <a-torus radius="1.8" radius-tubular="0.06"
+      rotation="90 0 0" position="0 0.05 0"
+      color="#ff8822"
+      material="opacity:0.55; transparent:true; shader:flat; emissive:#ff8822; emissiveIntensity:0.5"
+      segments-radial="32" segments-tubular="8">
+    </a-torus>
     <!-- Left wall -->
     <a-entity position="-1.25 0  3"    bush-patch="size:2.1; color:#071a07"></a-entity>
     <a-entity position="-1.25 0  1.5"  bush-patch="size:2.1; color:#051408"></a-entity>
@@ -314,6 +345,13 @@
   <a-entity id="spot5"
     hiding-spot="score:1; label:Open Forest Floor; radius:2; spotId:5"
     position="1 0 -6">
+    <!-- Score ring: red = worst hiding spot -->
+    <a-torus radius="2.0" radius-tubular="0.06"
+      rotation="90 0 0" position="0 0.05 0"
+      color="#ff3322"
+      material="opacity:0.55; transparent:true; shader:flat; emissive:#ff3322; emissiveIntensity:0.5"
+      segments-radial="32" segments-tubular="8">
+    </a-torus>
     <!-- Only sparse, inadequate cover -->
     <a-entity ground-cover="count:7; spread:1.6; color:#283c18; size:0.28"></a-entity>
     <a-sphere radius="0.22" color="#2c2c20" material="roughness:1" position=" 0.9 0.14  0.5"></a-sphere>
@@ -358,11 +396,25 @@
     deer-idle>
     <a-light type="point" color="#7a5830" intensity="0.38" distance="1.5"></a-light>
     <a-text id="deer-hint"
-      value="Hold GRIP to carry"
+      value="Click to carry"
       align="center" color="#c8a060"
       width="2.2" position="0 1.5 0"
       look-at="#player-camera">
     </a-text>
+    <!-- Mouse click target — invisible sphere at deer's visual centre -->
+    <a-sphere class="clickable" id="deer-clickzone"
+      radius="0.7" position="0 0.5 0"
+      material="opacity:0; transparent:true; shader:flat"
+      mouse-grab-handler>
+    </a-sphere>
+    <!-- Grab indicator ring — flat torus on ground around deer, pulses -->
+    <a-torus id="grab-ring"
+      radius="0.75" radius-tubular="0.025"
+      rotation="90 0 0" position="0 0.03 0"
+      color="#ffee88"
+      material="opacity:0.5; transparent:true; shader:flat; emissive:#ffee88; emissiveIntensity:0.5"
+      segments-radial="24" segments-tubular="8">
+    </a-torus>
   </a-entity>
 
   <!-- ═══════════════════════════════════════════════════════════
@@ -1107,6 +1159,100 @@ AFRAME.registerComponent('deer-idle', {
       this._baseScale.z * b
     );
     this.el.object3D.position.y = Math.sin(this._t * 1.2) * 0.008;
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
+   MOUSE GRAB HANDLER
+   Click the deer to pick it up; it follows the camera at 1.5 m forward.
+   Click again to release onto the ground and check the hiding spot.
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('mouse-grab-handler', {
+  init() {
+    this._held = false;
+    this._over = false;
+    this._t    = 0;
+    this._r    = null;
+    this.el.addEventListener('click',      this._onClick.bind(this));
+    this.el.addEventListener('mouseenter', () => { this._over = true;  });
+    this.el.addEventListener('mouseleave', () => { this._over = false; });
+  },
+  _getR() {
+    if (!this._r) this._r = document.getElementById('grab-ring');
+    return this._r;
+  },
+  _getDeer() { return document.getElementById('the-deer'); },
+  _onClick() {
+    if (GameState.phase !== 'hide') return;
+    this._held ? this._release() : this._grab();
+  },
+  _grab() {
+    this._held = true;
+    initAudio();
+    const deer = this._getDeer();
+    const hint = document.getElementById('deer-hint');
+    if (hint) hint.setAttribute('visible', false);
+    if (deer.components['deer-idle']) deer.components['deer-idle'].setGrabbed(true);
+    if (GameState.deerHidingSpotId !== null) {
+      const se = document.getElementById('spot' + GameState.deerHidingSpotId);
+      if (se && se.components['hiding-spot']) se.components['hiding-spot'].deactivate();
+    }
+    setCamouflage(0);
+    const r = this._getR();
+    if (r) r.setAttribute('material',
+      'opacity:0.9; transparent:true; shader:flat; emissive:#ff8844; emissiveIntensity:0.9');
+  },
+  _release() {
+    this._held = false;
+    const cam = document.getElementById('player-camera');
+    const wp  = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+    cam.object3D.getWorldPosition(wp);
+    cam.object3D.getWorldDirection(dir);
+    wp.x += dir.x * 1.5;
+    wp.z += dir.z * 1.5;
+    wp.y = 0;
+    const deer = this._getDeer();
+    deer.setAttribute('position', { x: wp.x, y: 0, z: wp.z });
+    if (deer.components['deer-idle']) deer.components['deer-idle'].setGrabbed(false);
+    const hint = document.getElementById('deer-hint');
+    if (hint) hint.setAttribute('visible', true);
+    const r = this._getR();
+    if (r) r.setAttribute('material',
+      'opacity:0.5; transparent:true; shader:flat; emissive:#ffee88; emissiveIntensity:0.5');
+    const spotComp = checkHidingSpot(wp);
+    if (spotComp) {
+      spotComp.activate(spotComp.data.score);
+      setCamouflage(spotComp.data.score);
+      showPlaceFeedback(spotComp.data.label, spotComp.data.score);
+    } else {
+      GameState.deerHidingScore  = 0;
+      GameState.deerHidingSpotId = null;
+      setCamouflage(0);
+    }
+    GameState.deerPosition = { x: wp.x, y: 0, z: wp.z };
+  },
+  tick(time, dt) {
+    this._t += dt * 0.001;
+    const r = this._getR();
+    if (!r) return;
+    if (this._held) {
+      // Move deer to 1.5 m in front of camera on ground plane
+      const cam = document.getElementById('player-camera');
+      if (!cam) return;
+      const wp  = new THREE.Vector3();
+      const dir = new THREE.Vector3();
+      cam.object3D.getWorldPosition(wp);
+      cam.object3D.getWorldDirection(dir);
+      const deer = this._getDeer();
+      deer.object3D.position.set(wp.x + dir.x * 1.5, 0, wp.z + dir.z * 1.5);
+    } else {
+      // Pulse ring: brighter on hover
+      const base = this._over ? 0.75 : 0.35;
+      const op = base + Math.sin(this._t * 3.0) * 0.18;
+      r.setAttribute('material',
+        `opacity:${op.toFixed(3)}; transparent:true; shader:flat; emissive:#ffee88; emissiveIntensity:0.5`);
+    }
   }
 });
 
