@@ -31,8 +31,9 @@
   id="main-scene">
 
   <!-- ═══ ASSETS ═══ -->
+  <!-- Deer is built procedurally (no external textures) -->
+  <!-- Leopard is a self-contained GLB with no external texture files -->
   <a-assets timeout="30000">
-    <a-asset-item id="deer-model"    src="Models/muntjac-or-tufted-deer/source/model.glb"></a-asset-item>
     <a-asset-item id="leopard-model" src="Models/leopard_main.glb"></a-asset-item>
   </a-assets>
 
@@ -342,20 +343,21 @@
   <!-- ═══════════════════════════════════════════════════════════
        DEER — tufted deer, grabbable at scene center
   ═══════════════════════════════════════════════════════════════ -->
+  <!-- Deer: procedural geometry — dark chocolate tufted deer silhouette -->
   <a-entity
     id="the-deer"
     class="grabbable"
-    gltf-model="#deer-model"
     position="0 0 -2"
-    scale="0.8 0.8 0.8"
+    scale="1 1 1"
     rotation="0 180 0"
     cast-shadow="true"
+    deer-body
     deer-idle>
     <a-light type="point" color="#7a5830" intensity="0.38" distance="1.5"></a-light>
     <a-text id="deer-hint"
       value="Hold GRIP to carry"
       align="center" color="#c8a060"
-      width="2.2" position="0 1.4 0"
+      width="2.2" position="0 1.5 0"
       look-at="#player-camera">
     </a-text>
   </a-entity>
@@ -536,20 +538,16 @@ const CAMO_OPACITY = { 5: 0.28, 4: 0.50, 3: 0.72, 2: 0.88, 1: 1.0, 0: 1.0 };
 function setCamouflage(score) {
   const deer = document.getElementById('the-deer');
   if (!deer) return;
-  const apply = () => {
-    const opacity = CAMO_OPACITY[score] ?? 1.0;
-    deer.object3D.traverse(child => {
-      if (!child.isMesh) return;
-      const mats = Array.isArray(child.material) ? child.material : [child.material];
-      mats.forEach(m => {
-        m.transparent = opacity < 1.0;
-        m.opacity     = opacity;
-        m.needsUpdate = true;
-      });
+  const opacity = CAMO_OPACITY[score] ?? 1.0;
+  deer.object3D.traverse(child => {
+    if (!child.isMesh) return;
+    const mats = Array.isArray(child.material) ? child.material : [child.material];
+    mats.forEach(m => {
+      m.transparent = opacity < 1.0;
+      m.opacity     = opacity;
+      m.needsUpdate = true;
     });
-  };
-  if (deer.components['gltf-model'] && deer.getObject3D('mesh')) apply();
-  else deer.addEventListener('model-loaded', apply, { once: true });
+  });
 }
 
 /* ═══ HIDING SPOT DETECTION ═══════════════════════════════════════
@@ -961,20 +959,107 @@ AFRAME.registerComponent('hiding-spot', {
 });
 
 /* ════════════════════════════════════════════════════════════════
+   DEER BODY — procedural tufted deer shape using A-Frame primitives.
+   Dimensions approximate a real tufted deer (~0.9 m tall, ~1 m long).
+   Color: dark chocolate brown (#3a2010) matching the species' coat.
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('deer-body', {
+  init() {
+    const el  = this.el;
+    const B   = '#3a2010';   // dark chocolate brown — body
+    const MB  = '#4a2c14';   // medium brown — head / face
+    const DK  = '#1a0c06';   // very dark — tuft on forehead
+    const WHT = '#d8d0c0';   // creamy white — belly stripe + tail
+
+    function mk(tag, attrs) {
+      const e = document.createElement(tag);
+      Object.entries(attrs).forEach(([k,v]) => e.setAttribute(k, v));
+      el.appendChild(e);
+      return e;
+    }
+    function sp(pos, radius, color, sx=1, sy=1, sz=1, sw=9, sh=7) {
+      mk('a-sphere', { radius, position: pos, color,
+        material: 'roughness:1; metalness:0',
+        scale: `${sx} ${sy} ${sz}`,
+        'segments-width': sw, 'segments-height': sh });
+    }
+    function cy(pos, radius, height, color, rx=0, ry=0, rz=0) {
+      mk('a-cylinder', { radius, height, position: pos, color,
+        material: 'roughness:1; metalness:0',
+        rotation: `${rx} ${ry} ${rz}` });
+    }
+
+    // ── Body ──
+    sp('0 0.50 0',    0.24, B,  1.05, 0.88, 1.9);   // main torso
+    sp('0 0.51 0.32', 0.18, B,  0.9,  0.82, 1.0);   // chest bulge
+    sp('0 0.50 -0.30',0.16, B,  0.85, 0.8,  1.0);   // haunches
+
+    // ── Belly pale stripe ──
+    sp('0 0.35 0',    0.12, WHT, 0.9, 0.5, 1.4, 7, 5);
+
+    // ── Neck ──
+    cy('0 0.73 0.35', 0.09, 0.22, B, -28, 0, 0);
+
+    // ── Head ──
+    sp('0 0.88 0.52', 0.13, MB, 1.0, 1.05, 1.25, 9, 7);
+
+    // ── Muzzle / snout ──
+    sp('0 0.84 0.63', 0.07, MB, 0.85, 0.70, 1.2, 8, 6);
+
+    // ── Nostrils (two tiny dark dots) ──
+    sp('-0.025 0.82 0.68', 0.018, DK, 1,1,1, 5,4);
+    sp(' 0.025 0.82 0.68', 0.018, DK, 1,1,1, 5,4);
+
+    // ── Characteristic forehead tuft (tufted deer trait) ──
+    sp('0 0.97 0.50',  0.07, DK, 0.75, 1.15, 0.55, 7, 5);
+
+    // ── Eyes ──
+    sp('-0.09 0.90 0.58', 0.022, '#100806', 1,1,1, 5,4);
+    sp(' 0.09 0.90 0.58', 0.022, '#100806', 1,1,1, 5,4);
+
+    // ── Ears (tall and narrow — tufted deer ears are large) ──
+    sp('-0.12 1.00 0.47', 0.056, MB, 0.55, 1.50, 0.32, 7, 5);
+    sp(' 0.12 1.00 0.47', 0.056, MB, 0.55, 1.50, 0.32, 7, 5);
+    // Ear inner dark lining
+    sp('-0.12 1.01 0.485', 0.042, DK, 0.4, 1.3, 0.22, 6, 4);
+    sp(' 0.12 1.01 0.485', 0.042, DK, 0.4, 1.3, 0.22, 6, 4);
+
+    // ── 4 slender legs ──
+    cy('-0.11 0.20  0.22', 0.032, 0.40, B);   // front left
+    cy(' 0.11 0.20  0.22', 0.032, 0.40, B);   // front right
+    cy('-0.11 0.20 -0.22', 0.032, 0.40, B);   // back left
+    cy(' 0.11 0.20 -0.22', 0.032, 0.40, B);   // back right
+    // Hooves (small dark flattened spheres)
+    sp('-0.11 0.02  0.22', 0.038, DK, 1,0.5,1, 6,4);
+    sp(' 0.11 0.02  0.22', 0.038, DK, 1,0.5,1, 6,4);
+    sp('-0.11 0.02 -0.22', 0.038, DK, 1,0.5,1, 6,4);
+    sp(' 0.11 0.02 -0.22', 0.038, DK, 1,0.5,1, 6,4);
+
+    // ── Short tail (white underside, visible when startled) ──
+    sp('0 0.56 -0.45', 0.055, WHT, 1, 0.8, 0.6, 7, 5);
+    sp('0 0.57 -0.48', 0.040, B,   1, 0.7, 0.5, 6, 4);  // dark tip
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
    DEER IDLE ANIMATION
+   Works with procedural geometry — no model-loaded event needed.
 ════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('deer-idle', {
   init() {
     this._t         = 0;
     this._grabbed   = false;
     this._baseScale = null;
-    this.el.addEventListener('model-loaded', () => {
-      this._baseScale = this.el.object3D.scale.clone();
-    });
+    // Capture base scale on first tick (works for both GLTF and procedural)
   },
   setGrabbed(v) { this._grabbed = v; },
   tick(time, dt) {
-    if (this._grabbed || !this._baseScale) return;
+    // Lazy-init base scale
+    if (!this._baseScale) {
+      this._baseScale = this.el.object3D.scale.clone();
+      return;
+    }
+    if (this._grabbed) return;
     this._t += dt * 0.001;
     const b = 1 + Math.sin(this._t * 1.9) * 0.015;
     this.el.object3D.scale.set(
@@ -982,7 +1067,7 @@ AFRAME.registerComponent('deer-idle', {
       this._baseScale.y * b,
       this._baseScale.z * b
     );
-    this.el.object3D.position.y = Math.sin(this._t * 1.2) * 0.01;
+    this.el.object3D.position.y = Math.sin(this._t * 1.2) * 0.008;
   }
 });
 
