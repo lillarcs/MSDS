@@ -510,7 +510,8 @@ const GameState = {
   timeLeft: HIDE_DURATION,
   deerPosition:     { x: 0, y: 0, z: -1.2 },
   deerHidingScore:  null,   // 1-5 or null
-  deerHidingSpotId: null    // 1-5 or null
+  deerHidingSpotId: null,   // 1-5 or null
+  deerHeld:         false   // true while player is carrying the deer
 };
 
 /* ═══ AUDIO SYSTEM ════════════════════════════════════════════════ */
@@ -623,14 +624,19 @@ function setPhaseLabel(text) {
   if (v) v.setAttribute('value', text);
 }
 
-function showResult(outcome) {
+function showResult(outcome, score) {
+  const spotName  = GameState.deerHidingSpotId
+    ? (document.getElementById('spot' + GameState.deerHidingSpotId)
+        ?.components?.['hiding-spot']?.data?.label || 'Unknown spot')
+    : 'No hiding spot';
+  const scoreStr  = score > 0 ? `Score: ${score}/5 — ${spotName}` : 'Not hidden in any spot';
   let text, color, bg;
   if (outcome === 'survived-well') {
-    text  = 'Safe!\nThe leopard patrolled past.\nThe deer is well hidden.';
+    text  = `Safe!\nThe leopard didn't find the deer.\n${scoreStr}`;
     color = '#44ff88'; bg = '#061a0a';
     setPhaseLabel('Safe! The deer survived!');
   } else {
-    text  = 'The deer was found!\nThe leopard detected the deer\nin its exposed hiding spot.';
+    text  = `The deer was found!\nThe leopard detected it.\n${scoreStr}`;
     color = '#ff5544'; bg = '#180808';
     setPhaseLabel('The deer was found!');
   }
@@ -1240,6 +1246,7 @@ AFRAME.registerComponent('mouse-grab-handler', {
   },
   _grab() {
     this._held = true;
+    GameState.deerHeld = true;
     initAudio();
     const deer = this._getDeer();
     const hint = document.getElementById('deer-hint');
@@ -1253,6 +1260,7 @@ AFRAME.registerComponent('mouse-grab-handler', {
   },
   _release() {
     this._held = false;
+    GameState.deerHeld = false;
     const cam = document.getElementById('player-camera');
     const wp  = new THREE.Vector3();
     const dir = new THREE.Vector3();
@@ -1384,80 +1392,39 @@ AFRAME.registerComponent('grabber', {
 ════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('leopard-patrol', {
   init() {
-    this._active     = false;
-    this._idx        = 0;
-    this._speed      = 1.2;
-    this._rushing    = false;
-    this._rushTarget = null;
-    this._deerHidden = false;
-    this._waypoints  = [
-      { x:  0,   z: -22 },   // spawn point
-      { x: 13,   z: -20 },   // mountain rocks
-      { x:  9,   z: -10 },   // rocky gully
-      { x:  1,   z:  -6 },   // open floor
-      { x: -4,   z:  -9 },   // corridor
-      { x:  3.5, z: -14 },   // river bank
-      { x: -7,   z: -13 },   // deep undergrowth
-    ];
+    this._pacing = false;
+    this._paceT  = 0;
+    this._origin = new THREE.Vector3();
   },
-  start(deerHidden) {
-    this._deerHidden = !!deerHidden;
-    const p = this._waypoints[0];
-    this.el.setAttribute('position', `${p.x} 0 ${p.z}`);
+  // spawnPos: {x, z} — next to deer or player
+  // score: 0-5
+  start(spawnPos, score) {
+    this.el.setAttribute('position', `${spawnPos.x + 1.2} 0 ${spawnPos.z}`);
     this.el.setAttribute('visible', true);
-    this._active = true;
-    this._idx    = 1;
+    this._origin.set(spawnPos.x + 1.2, 0, spawnPos.z);
+    this._pacing = true;
+    this._paceT  = 0;
     startLeopardGrowl();
 
-    if (!deerHidden) {
-      // Deer is not in any hiding spot — leopard rushes straight to it
-      const dp = GameState.deerPosition;
-      this._rushTarget = new THREE.Vector3(dp.x, 0, dp.z);
-      this._rushing    = true;
-      this._speed      = 4.5;
-      setTimeout(() => {
-        GameState.phase = 'result';
-        showResult('caught');
-      }, 3500);
-    } else {
-      // Deer is hidden — leopard patrols, then result shown when done
-    }
+    // Decide outcome from score
+    const safe = score >= 3;
+    setTimeout(() => {
+      GameState.phase = 'result';
+      showResult(safe ? 'survived-well' : 'caught', score);
+    }, 2500);
   },
   tick(time, dt) {
-    if (this._rushing && this._rushTarget) {
-      const pos = this.el.object3D.position;
-      pos.lerp(this._rushTarget, (dt / 1000) * this._speed);
-      // Attack scale pulse
-      const pulse = 1 + Math.sin(time * 0.025) * 0.12;
-      this.el.object3D.scale.set(pulse, pulse, pulse);
-      if (pos.distanceTo(this._rushTarget) < 0.2) {
-        this._rushing = false;
-        this.el.object3D.scale.set(1, 1, 1);
-      }
-      return;
-    }
-    if (!this._active) return;
-    const tgt = this._waypoints[this._idx];
-    if (!tgt) return;
-    const pos = this.el.object3D.position;
-    const dx  = tgt.x - pos.x;
-    const dz  = tgt.z - pos.z;
-    const dist = Math.sqrt(dx * dx + dz * dz);
-    if (dist < 0.35) {
-      this._idx++;
-      if (this._idx >= this._waypoints.length) {
-        this._active = false;
-        if (GameState.phase === 'leopard') {
-          GameState.phase = 'result';
-          showResult('survived-well');
-        }
-      }
-    } else {
-      const mv = this._speed * (dt / 1000);
-      pos.x += (dx / dist) * mv;
-      pos.z += (dz / dist) * mv;
-      this.el.object3D.rotation.y = Math.atan2(dx, dz);
-    }
+    if (!this._pacing) return;
+    // Leopard paces back and forth around spawn point
+    this._paceT += dt * 0.001;
+    const ox = Math.sin(this._paceT * 1.6) * 0.8;
+    const oz = Math.cos(this._paceT * 0.9) * 0.5;
+    this.el.object3D.position.set(
+      this._origin.x + ox,
+      0,
+      this._origin.z + oz
+    );
+    this.el.object3D.rotation.y = Math.atan2(ox, oz);
   }
 });
 
@@ -1518,12 +1485,22 @@ AFRAME.registerComponent('game-manager', {
       if (ov) ov.className = 'urgent';
       const hint = document.getElementById('deer-hint');
       if (hint) hint.setAttribute('visible', false);
-      // Check hiding status now — result determined at spawn, not during patrol
-      const deerHidden = (GameState.deerHidingScore || 0) > 0;
+      // Determine spawn position: next to deer if placed, else next to player
+      const score = GameState.deerHidingScore || 0;
+      let spawnPos;
+      if (GameState.deerHeld) {
+        // Deer still being carried — spawn next to player
+        const cam = document.getElementById('player-camera');
+        const cp  = new THREE.Vector3();
+        cam.object3D.getWorldPosition(cp);
+        spawnPos = { x: cp.x, z: cp.z };
+      } else {
+        spawnPos = { x: GameState.deerPosition.x, z: GameState.deerPosition.z };
+      }
       setTimeout(() => {
         const leo = document.getElementById('the-leopard');
         if (leo && leo.components['leopard-patrol'])
-          leo.components['leopard-patrol'].start(deerHidden);
+          leo.components['leopard-patrol'].start(spawnPos, score);
       }, 2500);
     }
   }
