@@ -5,358 +5,714 @@
   <title>Hide the Deer – WebXR VR Game</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/aframe-environment-component@1.3.2/dist/aframe-environment-component.min.js"></script>
   <style>
+    body { margin: 0; overflow: hidden; background: #080906; }
     #ui-overlay {
-      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-      background: rgba(0,0,0,0.6); color: #fff;
-      font-family: monospace; font-size: 22px;
-      padding: 10px 24px; border-radius: 8px;
-      z-index: 999; text-align: center;
-      pointer-events: none;
+      position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.82); color: #ccc;
+      font-family: monospace; font-size: 17px;
+      padding: 8px 20px; border-radius: 6px;
+      z-index: 999; text-align: center; pointer-events: none;
     }
+    #ui-overlay.urgent { color: #ff5533; }
   </style>
 </head>
 <body>
 
-<!-- ─── 2D fallback overlay (visible outside VR) ─────────────────────── -->
 <div id="ui-overlay">
-  <span id="phase-label">Find a hiding spot!</span> &nbsp;|&nbsp;
-  <span id="timer-display">2:00</span>
+  <span id="phase-label">Find a hiding spot!</span>&nbsp;|&nbsp;<span id="timer-display">2:00</span>
 </div>
 
 <a-scene
   webxr="requiredFeatures: local-floor, bounded-floor; optionalFeatures: hand-tracking"
   renderer="antialias: true; colorManagement: true; physicallyCorrectLights: true"
   shadow="type: pcfsoft"
-  fog="type: exponential; color: #5a7a3a; density: 0.04"
+  fog="type: exponential; color: #0c1009; density: 0.065"
   id="main-scene">
 
-  <!-- ═══════════════════════════════════════════════════════════════════
-       ASSETS
-  ═══════════════════════════════════════════════════════════════════ -->
+  <!-- ═══ ASSETS ═══ -->
   <a-assets timeout="30000">
-    <a-asset-item id="deer-model" src="Models/muntjac-or-tufted-deer/source/model.glb"></a-asset-item>
+    <a-asset-item id="deer-model"    src="Models/muntjac-or-tufted-deer/source/model.glb"></a-asset-item>
+    <a-asset-item id="leopard-model" src="Models/leopard_main.glb"></a-asset-item>
   </a-assets>
 
-  <!-- ═══════════════════════════════════════════════════════════════════
-       CAMERA / PLAYER RIG
-  ═══════════════════════════════════════════════════════════════════ -->
+  <!-- ═══ PLAYER RIG ═══ -->
   <a-entity id="player-rig" position="0 0 0">
-    <a-camera id="player-camera"
-      position="0 1.6 0"
+    <a-camera id="player-camera" position="0 1.6 0"
       wasd-controls="enabled: true; acceleration: 5"
       look-controls="pointerLockEnabled: false">
     </a-camera>
-
-    <!-- Left controller – shows Quest 2 model, grip-grab support -->
-    <a-entity
-      id="left-controller"
+    <a-entity id="left-controller"
       oculus-touch-controls="hand: left; model: true"
       grabber="hand: left">
     </a-entity>
-
-    <!-- Right controller – shows Quest 2 model, grip-grab support -->
-    <a-entity
-      id="right-controller"
+    <a-entity id="right-controller"
       oculus-touch-controls="hand: right; model: true"
       grabber="hand: right">
     </a-entity>
   </a-entity>
 
-  <!-- ═══════════════════════════════════════════════════════════════════
-       LIGHTING  – dappled South-Asian jungle feel
-  ═══════════════════════════════════════════════════════════════════ -->
-
-  <!-- Soft ambient: warm deep-forest green-gold -->
-  <a-light type="ambient" color="#7a9e5a" intensity="0.55"></a-light>
-
-  <!-- Main sun shaft: high-angle tropical sun, warm orange-yellow -->
-  <a-light type="directional"
-    color="#ffe8a0" intensity="1.1"
-    position="8 18 -6"
+  <!-- ═══ LIGHTING — dim canopy-filtered jungle ═══ -->
+  <a-light id="ambient-light" type="ambient" color="#141d0f" intensity="0.38"></a-light>
+  <!-- Weak dappled sun shaft -->
+  <a-light type="directional" color="#3a5028" intensity="0.42"
+    position="5 14 -8"
     cast-shadow="true"
     shadow-camera-left="-20" shadow-camera-right="20"
-    shadow-camera-top="20"  shadow-camera-bottom="-20"
-    shadow-map-width="2048"  shadow-map-height="2048">
+    shadow-camera-top="20"   shadow-camera-bottom="-20"
+    shadow-map-width="1024"  shadow-map-height="1024">
   </a-light>
+  <!-- Cool shadow fill -->
+  <a-light type="directional" color="#141e2a" intensity="0.14" position="-7 7 4"></a-light>
 
-  <!-- Fill from opposite side: cooler sky-blue bounce -->
-  <a-light type="directional"
-    color="#b8d4ff" intensity="0.25"
-    position="-6 10 8">
-  </a-light>
+  <!-- ═══ SKY — impenetrable dark canopy ═══ -->
+  <a-sky color="#0c100a" radius="150"></a-sky>
 
-  <!-- Ground bounce: warm earth tone -->
-  <a-light type="hemisphere"
-    color="#ffe0a0" ground-color="#4a3020" intensity="0.3">
-  </a-light>
-
-  <!-- ═══════════════════════════════════════════════════════════════════
-       SKY  – tropical overcast canopy glow
-  ═══════════════════════════════════════════════════════════════════ -->
-  <a-sky color="#6a9e4a" radius="200"></a-sky>
-
-  <!-- ═══════════════════════════════════════════════════════════════════
-       GROUND
-  ═══════════════════════════════════════════════════════════════════ -->
-  <a-plane id="ground"
-    position="0 0 0" rotation="-90 0 0"
-    width="80" height="80"
-    color="#4a6b2a"
-    material="roughness: 1; metalness: 0; repeat: 20 20"
-    receive-shadow="true">
+  <!-- ═══ GROUND — dark soil ═══ -->
+  <a-plane id="ground" rotation="-90 0 0" width="80" height="80"
+    color="#110d06" material="roughness:1; metalness:0" receive-shadow="true">
   </a-plane>
+  <!-- Leaf litter patches -->
+  <a-plane position="-2  0.004 -7"  rotation="-90 25 0"  width="4"   height="3"   color="#1a1206" material="opacity:0.65; transparent:true"></a-plane>
+  <a-plane position="3   0.004 -12" rotation="-90 -15 0" width="3"   height="2.5" color="#1d1308" material="opacity:0.55; transparent:true"></a-plane>
+  <a-plane position="-5  0.004 -5"  rotation="-90 40 0"  width="3.5" height="2.5" color="#181004" material="opacity:0.60; transparent:true"></a-plane>
+  <a-plane position="1   0.004 -17" rotation="-90 -30 0" width="4"   height="3"   color="#1a1206" material="opacity:0.55; transparent:true"></a-plane>
+  <a-plane position="-8  0.004 -16" rotation="-90 10 0"  width="3"   height="4"   color="#181004" material="opacity:0.65; transparent:true"></a-plane>
+  <a-plane position="5   0.004 -20" rotation="-90 -20 0" width="3.5" height="2.5" color="#1a1206" material="opacity:0.5;  transparent:true"></a-plane>
 
-  <!-- Dirt path worn through center -->
-  <a-plane
-    position="0 0.01 0" rotation="-90 0 0"
-    width="2.2" height="80"
-    color="#8b6040"
-    material="roughness: 1; opacity: 0.85; transparent: true"
-    receive-shadow="true">
-  </a-plane>
-
-  <!-- ═══════════════════════════════════════════════════════════════════
-       FOREST – trees, bamboo, undergrowth
-       All positions keep center 8m clear for gameplay
-  ═══════════════════════════════════════════════════════════════════ -->
-
-  <!-- ── Tall jungle trees ──────────────────────────────────────────── -->
-
-  <!-- Row left -->
-  <a-entity id="tree-L1" position="-5 0 -4"  jungle-tree="height:8; trunkColor:#5a3820; leafColor:#2d6a1a; leafSize:3.5"></a-entity>
-  <a-entity id="tree-L2" position="-7 0 -10" jungle-tree="height:10; trunkColor:#4a3018; leafColor:#3a7a20; leafSize:4"></a-entity>
-  <a-entity id="tree-L3" position="-4 0 -16" jungle-tree="height:9;  trunkColor:#5a3820; leafColor:#2d6a1a; leafSize:3.8"></a-entity>
-  <a-entity id="tree-L4" position="-9 0 2"   jungle-tree="height:11; trunkColor:#4a3018; leafColor:#348020; leafSize:4.5"></a-entity>
-  <a-entity id="tree-L5" position="-6 0 8"   jungle-tree="height:7;  trunkColor:#5a3820; leafColor:#2d6a1a; leafSize:3.2"></a-entity>
-  <a-entity id="tree-L6" position="-11 0 -2" jungle-tree="height:12; trunkColor:#3a2510; leafColor:#3a7a20; leafSize:5"></a-entity>
-
-  <!-- Row right -->
-  <a-entity id="tree-R1" position="5 0 -4"   jungle-tree="height:9;  trunkColor:#4a3018; leafColor:#3a7a20; leafSize:4"></a-entity>
-  <a-entity id="tree-R2" position="8 0 -9"   jungle-tree="height:11; trunkColor:#5a3820; leafColor:#2d6a1a; leafSize:4.5"></a-entity>
-  <a-entity id="tree-R3" position="6 0 -15"  jungle-tree="height:8;  trunkColor:#4a3018; leafColor:#348020; leafSize:3.5"></a-entity>
-  <a-entity id="tree-R4" position="10 0 1"   jungle-tree="height:10; trunkColor:#5a3820; leafColor:#2d6a1a; leafSize:4.2"></a-entity>
-  <a-entity id="tree-R5" position="7 0 7"    jungle-tree="height:9;  trunkColor:#4a3018; leafColor:#3a7a20; leafSize:3.8"></a-entity>
-  <a-entity id="tree-R6" position="12 0 -3"  jungle-tree="height:13; trunkColor:#3a2510; leafColor:#3a7a20; leafSize:5.5"></a-entity>
-
-  <!-- Deep background trees (visual mass) -->
-  <a-entity position="-3 0 -22"  jungle-tree="height:14; trunkColor:#4a3018; leafColor:#3a7a20; leafSize:6"></a-entity>
-  <a-entity position="3 0 -22"   jungle-tree="height:12; trunkColor:#5a3820; leafColor:#2d6a1a; leafSize:5"></a-entity>
-  <a-entity position="-14 0 -8"  jungle-tree="height:14; trunkColor:#3a2510; leafColor:#3a7a20; leafSize:6"></a-entity>
-  <a-entity position="14 0 -8"   jungle-tree="height:13; trunkColor:#3a2510; leafColor:#348020; leafSize:5.5"></a-entity>
-  <a-entity position="-16 0 4"   jungle-tree="height:15; trunkColor:#3a2510; leafColor:#2d6a1a; leafSize:6.5"></a-entity>
-  <a-entity position="16 0 4"    jungle-tree="height:15; trunkColor:#3a2510; leafColor:#3a7a20; leafSize:6.5"></a-entity>
-
-  <!-- ── Bamboo groves ──────────────────────────────────────────────── -->
-  <a-entity id="bamboo-grove-L" bamboo-grove="count:12; spread:2.5; baseX:-8; baseZ:-6"></a-entity>
-  <a-entity id="bamboo-grove-R" bamboo-grove="count:10; spread:2;   baseX:9;  baseZ:-12"></a-entity>
-  <a-entity id="bamboo-grove-B" bamboo-grove="count:14; spread:3;   baseX:-2; baseZ:-20"></a-entity>
-
-  <!-- ── Rocks ──────────────────────────────────────────────────────── -->
-  <!-- Mossy boulders scattered around -->
-  <a-entity id="rock-cluster-1" position="-4.5 0 -7">
-    <a-sphere radius="0.7" color="#5a5a4a" material="roughness:1" position="0 0.4 0" scale="1.3 0.9 1.1" cast-shadow receive-shadow></a-sphere>
-    <a-sphere radius="0.45" color="#4a4a3a" material="roughness:1" position="0.8 0.25 0.3" scale="1 0.85 1.2" cast-shadow receive-shadow></a-sphere>
-    <a-sphere radius="0.3" color="#606050" material="roughness:1" position="-0.6 0.18 0.5" scale="1.1 0.8 0.9" cast-shadow receive-shadow></a-sphere>
-  </a-entity>
-
-  <a-entity id="rock-cluster-2" position="6.5 0 -6">
-    <a-sphere radius="0.9" color="#5a5a4a" material="roughness:1" position="0 0.5 0" scale="1.2 0.9 1" cast-shadow receive-shadow></a-sphere>
-    <a-sphere radius="0.5" color="#4a4a3a" material="roughness:1" position="-1 0.28 0.4" scale="1 0.8 1.1" cast-shadow receive-shadow></a-sphere>
-  </a-entity>
-
-  <a-entity id="rock-cluster-3" position="-3 0 -13">
-    <a-sphere radius="0.6" color="#5a5a4a" material="roughness:1" position="0 0.35 0" scale="1.4 0.8 1" cast-shadow receive-shadow></a-sphere>
-    <a-sphere radius="0.35" color="#606050" material="roughness:1" position="0.6 0.2 -0.4" scale="1 0.9 1.2" cast-shadow receive-shadow></a-sphere>
-  </a-entity>
-
-  <a-entity id="rock-cluster-4" position="4 0 -14">
-    <a-sphere radius="0.8" color="#4a4a3a" material="roughness:1" position="0 0.45 0" scale="1.2 0.85 1" cast-shadow receive-shadow></a-sphere>
-    <a-sphere radius="0.4" color="#5a5a4a" material="roughness:1" position="0.9 0.23 0.3" scale="1 0.8 1" cast-shadow receive-shadow></a-sphere>
-    <a-sphere radius="0.25" color="#606050" material="roughness:1" position="-0.7 0.15 -0.5" cast-shadow receive-shadow></a-sphere>
-  </a-entity>
-
-  <!-- ── Fallen logs ────────────────────────────────────────────────── -->
-  <a-cylinder id="log-1"
-    position="-3.5 0.18 -9" rotation="0 35 90"
-    radius="0.2" height="3"
-    color="#6b4020" material="roughness:1"
-    cast-shadow receive-shadow>
-  </a-cylinder>
-
-  <a-cylinder id="log-2"
-    position="5.5 0.18 -11" rotation="0 -20 90"
-    radius="0.25" height="3.5"
-    color="#5a3518" material="roughness:1"
-    cast-shadow receive-shadow>
-  </a-cylinder>
-
-  <a-cylinder id="log-3"
-    position="-1.5 0.15 -17" rotation="0 60 90"
-    radius="0.18" height="2.8"
-    color="#7a5030" material="roughness:1"
-    cast-shadow receive-shadow>
-  </a-cylinder>
-
-  <!-- ── Dense undergrowth / bush patches ──────────────────────────── -->
-  <a-entity id="bush-L1" position="-3.8 0 -5.5" bush-patch="size:1.4; color:#1a5a10"></a-entity>
-  <a-entity id="bush-L2" position="-5.5 0 -8"   bush-patch="size:1.6; color:#1a6010"></a-entity>
-  <a-entity id="bush-L3" position="-2.5 0 -11"  bush-patch="size:1.2; color:#206a15"></a-entity>
-  <a-entity id="bush-R1" position="4.2 0 -5.5"  bush-patch="size:1.5; color:#1a5a10"></a-entity>
-  <a-entity id="bush-R2" position="6 0 -9"      bush-patch="size:1.8; color:#1a6010"></a-entity>
-  <a-entity id="bush-R3" position="3.5 0 -13"   bush-patch="size:1.3; color:#206a15"></a-entity>
-  <a-entity id="bush-C1" position="-1 0 -8"     bush-patch="size:1; color:#1a6010"></a-entity>
-
-  <!-- Ferns / ground cover -->
-  <a-entity id="ferns-1" ground-cover="count:20; spread:5; baseX:0;  baseZ:-8;  color:#2a7a15; size:0.4"></a-entity>
-  <a-entity id="ferns-2" ground-cover="count:15; spread:4; baseX:-6; baseZ:-12; color:#227010; size:0.35"></a-entity>
-  <a-entity id="ferns-3" ground-cover="count:18; spread:5; baseX:6;  baseZ:-10; color:#2a7a15; size:0.38"></a-entity>
-
-  <!-- ── Vines hanging from trees ──────────────────────────────────── -->
-  <a-entity vine="length:3; baseX:-5; baseY:7; baseZ:-4"></a-entity>
-  <a-entity vine="length:4; baseX:5;  baseY:8; baseZ:-4"></a-entity>
-  <a-entity vine="length:2.5; baseX:-7; baseY:9; baseZ:-10"></a-entity>
-  <a-entity vine="length:3.5; baseX:8;  baseY:10; baseZ:-9"></a-entity>
-
-  <!-- ── Fireflies (point lights that gently pulse) ─────────────────── -->
-  <a-entity id="firefly-1" position="-3 1.2 -6"  firefly></a-entity>
-  <a-entity id="firefly-2" position="4  1.5 -8"  firefly></a-entity>
-  <a-entity id="firefly-3" position="-1 1.8 -12" firefly></a-entity>
-
-  <!-- ═══════════════════════════════════════════════════════════════════
-       IN-WORLD UI  (rendered as A-Frame geometry, visible in headset)
-  ═══════════════════════════════════════════════════════════════════ -->
-
-  <!-- Timer panel floating above the path near the player -->
-  <a-entity id="timer-panel" position="0 2.4 -2.5">
-    <!-- Background slab -->
-    <a-plane width="1.4" height="0.35" color="#1a2a0a" material="opacity:0.75; transparent:true"></a-plane>
-    <!-- Timer text -->
-    <a-text id="vr-timer"
-      value="2:00" align="center"
-      color="#ffe080" width="3.5"
-      position="0 0.04 0.01">
-    </a-text>
-    <!-- Phase text -->
-    <a-text id="vr-phase"
-      value="HIDE THE DEER!" align="center"
-      color="#aaffaa" width="3" font="monoid"
-      position="0 -0.1 0.01">
+  <!-- ═══════════════════════════════════════════════════════════
+       EDUCATIONAL INTRO PANEL
+  ═══════════════════════════════════════════════════════════════ -->
+  <a-entity id="intro-panel" position="0 1.7 -1.85" intro-panel>
+    <a-plane width="1.96" height="1.1"  color="#443318" material="opacity:0.45; transparent:true" position="0 0 -0.006"></a-plane>
+    <a-plane width="1.88" height="1.04" color="#0a0c08" material="opacity:0.93; transparent:true"></a-plane>
+    <a-text
+      value="TUFTED DEER — SURVIVAL BY HIDING&#10;&#10;Tufted deer do not outrun leopards.&#10;They vanish into the forest.&#10;&#10;Their dark chocolate coat blends&#10;into dense shadow, tangled shrubs&#10;and riparian undergrowth.&#10;&#10;You have 2 minutes.&#10;Choose your hiding spot wisely."
+      align="center" color="#c0a85a" width="3.3"
+      position="0 0.02 0.01" wrap-count="30" baseline="center">
     </a-text>
   </a-entity>
 
-  <!-- ═══════════════════════════════════════════════════════════════════
-       TUFTED DEER  – grabbable with Quest 2 controllers
-       Placed 1.5 m in front of the player on the dirt path.
-       Scale may need tweaking once you see the model in headset.
-  ═══════════════════════════════════════════════════════════════════ -->
+  <!-- ═══ TIMER PANEL (world-space) ═══ -->
+  <a-entity id="timer-panel" position="0 2.6 -2.5">
+    <a-plane width="1.55" height="0.40" color="#070d05" material="opacity:0.88; transparent:true"></a-plane>
+    <a-text id="vr-timer" value="2:00" align="center" color="#ffe080" width="3.9" position="0  0.055 0.01"></a-text>
+    <a-text id="vr-phase" value="HIDE THE DEER!"  align="center" color="#80cc80" width="3.3" position="0 -0.105 0.01"></a-text>
+  </a-entity>
+
+  <!-- ═══ RESULT PANEL (hidden until game end) ═══ -->
+  <a-entity id="result-panel" position="0 1.7 -2" visible="false">
+    <a-plane id="result-bg" width="2.5" height="0.95" color="#070d05" material="opacity:0.93; transparent:true"></a-plane>
+    <a-text id="result-text" value="" align="center" color="#ffffff" width="4.2"
+      position="0 0 0.01" wrap-count="33" baseline="center">
+    </a-text>
+  </a-entity>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       TREES — LARGE CANOPY  (height 10-16)  ~20 trees
+  ═══════════════════════════════════════════════════════════════ -->
+  <!-- Cluster directly above Spot 1 — deep shadow corner (left) -->
+  <a-entity position="-6  0 -11" jungle-tree="height:12; trunkColor:#1c1008; leafColor:#0e1c08; leafSize:5"></a-entity>
+  <a-entity position="-10 0 -12" jungle-tree="height:14; trunkColor:#160c06; leafColor:#0a1606; leafSize:6"></a-entity>
+  <a-entity position="-8  0 -16" jungle-tree="height:13; trunkColor:#1c1008; leafColor:#0e1c08; leafSize:5.5"></a-entity>
+  <a-entity position="-5  0 -14" jungle-tree="height:11; trunkColor:#181008; leafColor:#0c1a07; leafSize:4.5"></a-entity>
+  <a-entity position="-12 0 -14" jungle-tree="height:15; trunkColor:#120a04; leafColor:#081406; leafSize:6.5"></a-entity>
+  <!-- Left flank deep forest -->
+  <a-entity position="-12 0 -5"  jungle-tree="height:13; trunkColor:#1c1008; leafColor:#0e1c08; leafSize:5.5"></a-entity>
+  <a-entity position="-15 0 -10" jungle-tree="height:14; trunkColor:#160c06; leafColor:#0a1606; leafSize:6"></a-entity>
+  <a-entity position="-16 0 -18" jungle-tree="height:12; trunkColor:#1c1008; leafColor:#0e1c08; leafSize:5"></a-entity>
+  <a-entity position="-13 0 -22" jungle-tree="height:15; trunkColor:#120a04; leafColor:#081406; leafSize:6.5"></a-entity>
+  <!-- Right flank (near rocky gully Spot 3) -->
+  <a-entity position="10  0 -8"  jungle-tree="height:12; trunkColor:#1c1008; leafColor:#0e1c08; leafSize:5"></a-entity>
+  <a-entity position="13  0 -12" jungle-tree="height:14; trunkColor:#181008; leafColor:#0c1a07; leafSize:5.5"></a-entity>
+  <a-entity position="11  0 -18" jungle-tree="height:13; trunkColor:#160c06; leafColor:#0a1606; leafSize:5.5"></a-entity>
+  <a-entity position="15  0 -6"  jungle-tree="height:11; trunkColor:#1c1008; leafColor:#0e1c08; leafSize:5"></a-entity>
+  <a-entity position="16  0 -16" jungle-tree="height:15; trunkColor:#120a04; leafColor:#081406; leafSize:6"></a-entity>
+  <!-- Far background tree wall -->
+  <a-entity position="-4  0 -24" jungle-tree="height:15; trunkColor:#120a04; leafColor:#081406; leafSize:6.5"></a-entity>
+  <a-entity position="0   0 -26" jungle-tree="height:16; trunkColor:#0e0804; leafColor:#061204; leafSize:7"></a-entity>
+  <a-entity position="4   0 -24" jungle-tree="height:14; trunkColor:#160c06; leafColor:#0a1606; leafSize:6"></a-entity>
+  <a-entity position="-9  0 -26" jungle-tree="height:15; trunkColor:#0e0804; leafColor:#061204; leafSize:7"></a-entity>
+  <a-entity position="9   0 -26" jungle-tree="height:15; trunkColor:#0e0804; leafColor:#061204; leafSize:7"></a-entity>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       TREES — MEDIUM CANOPY  (height 7-10)  ~12 trees
+  ═══════════════════════════════════════════════════════════════ -->
+  <a-entity position="-5  0 -4"  jungle-tree="height:8;  trunkColor:#1c1008; leafColor:#121e0e; leafSize:3.8"></a-entity>
+  <a-entity position="5   0 -4"  jungle-tree="height:9;  trunkColor:#181008; leafColor:#101c0c; leafSize:4"></a-entity>
+  <a-entity position="-8  0 -7"  jungle-tree="height:8;  trunkColor:#1c1008; leafColor:#121e0e; leafSize:3.5"></a-entity>
+  <a-entity position="7   0 -5"  jungle-tree="height:9;  trunkColor:#1c1008; leafColor:#101c0c; leafSize:4"></a-entity>
+  <a-entity position="-3  0 -19" jungle-tree="height:10; trunkColor:#181008; leafColor:#0c1a09; leafSize:4.5"></a-entity>
+  <a-entity position="3   0 -20" jungle-tree="height:9;  trunkColor:#160c06; leafColor:#0a1807; leafSize:4.2"></a-entity>
+  <a-entity position="6   0 -17" jungle-tree="height:8;  trunkColor:#1c1008; leafColor:#0e1c08; leafSize:4"></a-entity>
+  <a-entity position="-7  0 -20" jungle-tree="height:10; trunkColor:#120a04; leafColor:#081406; leafSize:4.5"></a-entity>
+  <a-entity position="-2  0 -3"  jungle-tree="height:7;  trunkColor:#1c1008; leafColor:#121e0e; leafSize:3.2"></a-entity>
+  <a-entity position="3   0 -3"  jungle-tree="height:8;  trunkColor:#181008; leafColor:#101c0c; leafSize:3.5"></a-entity>
+  <!-- Spot 5 single tree — tempting but sparse underneath -->
+  <a-entity id="spot5-tree" position="1 0 -6" jungle-tree="height:10; trunkColor:#221608; leafColor:#182810; leafSize:4.5"></a-entity>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       TREES — UNDERSTORY  (height 3-6, twisted, close-branching)
+  ═══════════════════════════════════════════════════════════════ -->
+  <a-entity position="-4  0 -10" understory-tree="height:4;   trunkColor:#140a06; leafColor:#091608; leafSize:1.8"></a-entity>
+  <a-entity position="-6  0 -8"  understory-tree="height:5;   trunkColor:#181008; leafColor:#0b1808; leafSize:2"></a-entity>
+  <a-entity position="-9  0 -9"  understory-tree="height:3.5; trunkColor:#140a06; leafColor:#091608; leafSize:1.5"></a-entity>
+  <a-entity position="2   0 -10" understory-tree="height:4.5; trunkColor:#181008; leafColor:#0c1a09; leafSize:2"></a-entity>
+  <a-entity position="4   0 -15" understory-tree="height:5;   trunkColor:#140a06; leafColor:#0b1808; leafSize:2.2"></a-entity>
+  <a-entity position="-2  0 -15" understory-tree="height:4;   trunkColor:#181008; leafColor:#091608; leafSize:1.8"></a-entity>
+  <a-entity position="8   0 -14" understory-tree="height:3.5; trunkColor:#140a06; leafColor:#0b1808; leafSize:1.6"></a-entity>
+  <a-entity position="-11 0 -8"  understory-tree="height:5;   trunkColor:#100806; leafColor:#071408; leafSize:2.2"></a-entity>
+  <a-entity position="12  0 -5"  understory-tree="height:4;   trunkColor:#181008; leafColor:#091608; leafSize:1.8"></a-entity>
+  <a-entity position="-3  0 -5"  understory-tree="height:3;   trunkColor:#1c1008; leafColor:#0e1c08; leafSize:1.4"></a-entity>
+  <a-entity position="5   0 -9"  understory-tree="height:4;   trunkColor:#140a06; leafColor:#091608; leafSize:1.7"></a-entity>
+  <a-entity position="-8  0 -3"  understory-tree="height:3.5; trunkColor:#181008; leafColor:#0b1808; leafSize:1.5"></a-entity>
+
+  <!-- ═══ Hanging moss on large trunks ═══ -->
+  <a-entity position="-10 7.5 -12" hanging-moss="length:2.2; count:7"></a-entity>
+  <a-entity position="-5  6   -14" hanging-moss="length:1.8; count:5"></a-entity>
+  <a-entity position="10  7   -8"  hanging-moss="length:2.5; count:6"></a-entity>
+  <a-entity position="-15 8   -10" hanging-moss="length:1.6; count:5"></a-entity>
+  <a-entity position="13  8   -12" hanging-moss="length:2;   count:6"></a-entity>
+
+  <!-- ═══ Bamboo patches ═══ -->
+  <a-entity bamboo-grove="count:10; spread:2;   baseX:-1; baseZ:-18"></a-entity>
+  <a-entity bamboo-grove="count:8;  spread:1.8; baseX:5;  baseZ:-20"></a-entity>
+
+  <!-- ════════════════════════════════════════════════════════════
+       HIDING SPOT 1 — Dense Understory Vegetation  (score 5/5)
+       Deep shadowed corner under large canopy trees
+       Position: (-7, 0, -13)
+  ════════════════════════════════════════════════════════════════ -->
+  <a-entity id="spot1"
+    hiding-spot="score:5; label:Dense Undergrowth; radius:2; spotId:1"
+    position="-7 0 -13">
+    <!-- Layered dark bushes -->
+    <a-entity bush-patch="size:2.6; color:#060e06"></a-entity>
+    <a-entity position=" 0.9 0 -0.5" bush-patch="size:2.1; color:#040c06"></a-entity>
+    <a-entity position="-0.8 0  0.8" bush-patch="size:1.9; color:#071208"></a-entity>
+    <a-entity position=" 0   0  1.3" bush-patch="size:2.3; color:#060e06"></a-entity>
+    <a-entity position="-1.1 0 -1.0" bush-patch="size:1.6; color:#040c06"></a-entity>
+    <!-- Low fern layer -->
+    <a-entity ground-cover="count:28; spread:2.3; color:#0c2810; size:0.45"></a-entity>
+    <!-- Overhead canopy simulation: dark occluding planes -->
+    <a-plane position=" 0   2.3  0"   rotation="-90 18 0"  width="4.2" height="4.2" color="#030804" material="opacity:0.78; transparent:true; side:double"></a-plane>
+    <a-plane position=" 0.6 2.7  0.4" rotation="-90 -12 0" width="3.2" height="3"   color="#020604" material="opacity:0.62; transparent:true; side:double"></a-plane>
+    <!-- Glow indicator — warm green, score 5 = brightest -->
+    <a-sphere class="spot-glow" radius="2"   position="0 0.5 0"
+      color="#2a5a1a" material="opacity:0; transparent:true; side:double; shader:flat"></a-sphere>
+  </a-entity>
+
+  <!-- ════════════════════════════════════════════════════════════
+       RIVER — winding dark water through the scene
+       Path: upper-left to right-mid
+  ════════════════════════════════════════════════════════════════ -->
+  <a-plane position="-1.8 0.03 -22"   rotation="-90  14 0" width="3"   height="5" color="#050c10" material="roughness:0.05; metalness:0.55; opacity:0.93; transparent:true"></a-plane>
+  <a-plane position=" 0.3 0.03 -19"   rotation="-90   9 0" width="3"   height="5" color="#070e12" material="roughness:0.05; metalness:0.55; opacity:0.93; transparent:true"></a-plane>
+  <a-plane position=" 2.0 0.03 -16.5" rotation="-90   3 0" width="3"   height="5" color="#050c10" material="roughness:0.05; metalness:0.55; opacity:0.93; transparent:true"></a-plane>
+  <a-plane position=" 3.2 0.03 -14"   rotation="-90  -4 0" width="3"   height="5" color="#070e12" material="roughness:0.05; metalness:0.55; opacity:0.93; transparent:true"></a-plane>
+  <a-plane position=" 4.2 0.03 -11.5" rotation="-90 -11 0" width="3"   height="5" color="#050c10" material="roughness:0.05; metalness:0.55; opacity:0.93; transparent:true"></a-plane>
+  <a-plane position=" 5.5 0.03 -9.5"  rotation="-90 -19 0" width="3"   height="5" color="#070e12" material="roughness:0.05; metalness:0.55; opacity:0.93; transparent:true"></a-plane>
+  <!-- Shimmer overlay -->
+  <a-plane position="3.2 0.038 -14" rotation="-90 -4 0" width="3.1" height="5.1"
+    color="#0a1c28" material="roughness:0; metalness:0.9; opacity:0.22; transparent:true"
+    animation="property: material.opacity; from:0.10; to:0.38; dur:2200; dir:alternate; loop:true; easing:sinusoidalInOut">
+  </a-plane>
+
+  <!-- ════════════════════════════════════════════════════════════
+       HIDING SPOT 2 — Riparian Vegetation / River Bank  (score 4/5)
+       Dense reeds, willows, tall grasses along river
+       Position: (3.5, 0, -14)
+  ════════════════════════════════════════════════════════════════ -->
+  <a-entity id="spot2"
+    hiding-spot="score:4; label:River Bank; radius:2.2; spotId:2"
+    position="3.5 0 -14">
+    <!-- Dense reeds -->
+    <a-entity reed-patch="count:22; spread:1.9; color:#153a12"></a-entity>
+    <!-- Willow-like drooping plants -->
+    <a-entity position=" 0.7 0  0.6"  willow-plant="height:3;   spread:2"></a-entity>
+    <a-entity position="-0.9 0 -0.8"  willow-plant="height:2.5; spread:1.8"></a-entity>
+    <a-entity position=" 1.3 0 -0.9"  willow-plant="height:2.2; spread:1.5"></a-entity>
+    <!-- Tall grasses -->
+    <a-entity ground-cover="count:24; spread:2.1; color:#1e4c16; size:0.68"></a-entity>
+    <!-- Dense bank shrubs -->
+    <a-entity position="-1.1 0  0.6"  bush-patch="size:1.4; color:#0b1e0e"></a-entity>
+    <a-entity position=" 1.0 0 -1.1"  bush-patch="size:1.3; color:#0d2210"></a-entity>
+    <!-- Glow indicator — teal-green -->
+    <a-sphere class="spot-glow" radius="2.2" position="0 0.5 0"
+      color="#0e2a22" material="opacity:0; transparent:true; side:double; shader:flat"></a-sphere>
+  </a-entity>
+
+  <!-- ════════════════════════════════════════════════════════════
+       HIDING SPOT 3 — Rocky Gully / Boulder Field  (score 3/5)
+       Cluster of large dark boulders on right side
+       Position: (9, 0, -10)
+  ════════════════════════════════════════════════════════════════ -->
+  <a-entity id="spot3"
+    hiding-spot="score:3; label:Rocky Gully; radius:2.2; spotId:3"
+    position="9 0 -10">
+    <!-- Large boulders in cluster with natural gaps -->
+    <a-sphere radius="1.1"  color="#1c1c16" material="roughness:1" position=" 0    0.7   0"    scale="1.3 0.95 1.1" cast-shadow receive-shadow></a-sphere>
+    <a-sphere radius="0.9"  color="#181810" material="roughness:1" position=" 1.5  0.6   0.5"  scale="1.1 0.9  1.2" cast-shadow receive-shadow></a-sphere>
+    <a-sphere radius="0.72" color="#202018" material="roughness:1" position="-1.3  0.5   0.7"  scale="1.2 0.85 1"   cast-shadow receive-shadow></a-sphere>
+    <a-sphere radius="0.85" color="#1c1c16" material="roughness:1" position="-0.7  0.52 -1.1"  scale="1.3 0.9  1"   cast-shadow receive-shadow></a-sphere>
+    <a-sphere radius="0.65" color="#181810" material="roughness:1" position=" 2    0.44 -0.5"  scale="1.1 0.85 1.1" cast-shadow receive-shadow></a-sphere>
+    <a-sphere radius="0.5"  color="#202018" material="roughness:1" position=" 0.5  0.34  1.5"  scale="1   0.8  1.3" cast-shadow receive-shadow></a-sphere>
+    <!-- Loose small stones -->
+    <a-sphere radius="0.22" color="#262620" material="roughness:1" position=" 0.9 0.14  1.9"></a-sphere>
+    <a-sphere radius="0.18" color="#222218" material="roughness:1" position="-1.6 0.12  0.3"></a-sphere>
+    <a-sphere radius="0.27" color="#242420" material="roughness:1" position=" 1.8 0.17  1.3"></a-sphere>
+    <a-sphere radius="0.15" color="#262620" material="roughness:1" position="-0.5 0.11 -1.6"></a-sphere>
+    <!-- Scrubby plants between rocks -->
+    <a-entity ground-cover="count:12; spread:1.9; color:#142c0e; size:0.3"></a-entity>
+    <!-- Gully shadow floor -->
+    <a-plane position="0 0.012 0" rotation="-90 20 0" width="4.5" height="3.5"
+      color="#0a0a07" material="opacity:0.52; transparent:true"></a-plane>
+    <!-- Glow indicator — amber-grey, score 3 -->
+    <a-sphere class="spot-glow" radius="2.2" position="0 0.5 0"
+      color="#1e1e0e" material="opacity:0; transparent:true; side:double; shader:flat"></a-sphere>
+  </a-entity>
+
+  <!-- ════════════════════════════════════════════════════════════
+       HIDING SPOT 4 — Vegetation Corridor  (score 2/5)
+       Narrow bush-tunnel, left side
+       Corridor runs from (-4,0,-6) to (-4,0,-12), centered at (-4,0,-9)
+  ════════════════════════════════════════════════════════════════ -->
+  <a-entity id="spot4"
+    hiding-spot="score:2; label:Narrow Corridor; radius:1.8; spotId:4"
+    position="-4 0 -9">
+    <!-- Left wall -->
+    <a-entity position="-1.25 0  3"    bush-patch="size:2.1; color:#071a07"></a-entity>
+    <a-entity position="-1.25 0  1.5"  bush-patch="size:2.1; color:#051408"></a-entity>
+    <a-entity position="-1.25 0  0"    bush-patch="size:2.1; color:#071a07"></a-entity>
+    <a-entity position="-1.25 0 -1.5"  bush-patch="size:2.1; color:#051408"></a-entity>
+    <a-entity position="-1.25 0 -3"    bush-patch="size:2.1; color:#071a07"></a-entity>
+    <!-- Right wall -->
+    <a-entity position=" 1.25 0  3"    bush-patch="size:2.1; color:#051408"></a-entity>
+    <a-entity position=" 1.25 0  1.5"  bush-patch="size:2.1; color:#071a07"></a-entity>
+    <a-entity position=" 1.25 0  0"    bush-patch="size:2.1; color:#051408"></a-entity>
+    <a-entity position=" 1.25 0 -1.5"  bush-patch="size:2.1; color:#071a07"></a-entity>
+    <a-entity position=" 1.25 0 -3"    bush-patch="size:2.1; color:#051408"></a-entity>
+    <!-- Interlocking overhead branches forming a natural roof -->
+    <a-plane position="0 2.05  2.6"  rotation="-90  12 0" width="2.5" height="2" color="#030803" material="opacity:0.68; transparent:true; side:double"></a-plane>
+    <a-plane position="0 2.25  0.9"  rotation="-90  -9 0" width="2.5" height="2" color="#030803" material="opacity:0.68; transparent:true; side:double"></a-plane>
+    <a-plane position="0 2.05 -0.8"  rotation="-90   5 0" width="2.5" height="2" color="#030803" material="opacity:0.68; transparent:true; side:double"></a-plane>
+    <a-plane position="0 2.25 -2.5"  rotation="-90 -11 0" width="2.5" height="2" color="#030803" material="opacity:0.68; transparent:true; side:double"></a-plane>
+    <!-- Glow indicator — dim olive -->
+    <a-sphere class="spot-glow" radius="1.8" position="0 0.5 0"
+      color="#1a2208" material="opacity:0; transparent:true; side:double; shader:flat"></a-sphere>
+  </a-entity>
+
+  <!-- ════════════════════════════════════════════════════════════
+       HIDING SPOT 5 — Open Forest Floor  (score 1/5)
+       Under a single tree, sparse and exposed
+       Position: (1, 0, -6)
+  ════════════════════════════════════════════════════════════════ -->
+  <a-entity id="spot5"
+    hiding-spot="score:1; label:Open Forest Floor; radius:2; spotId:5"
+    position="1 0 -6">
+    <!-- Only sparse, inadequate cover -->
+    <a-entity ground-cover="count:7; spread:1.6; color:#283c18; size:0.28"></a-entity>
+    <a-sphere radius="0.22" color="#2c2c20" material="roughness:1" position=" 0.9 0.14  0.5"></a-sphere>
+    <a-sphere radius="0.17" color="#242418" material="roughness:1" position="-0.7 0.11 -0.5"></a-sphere>
+    <!-- Glow indicator — red warning hint -->
+    <a-sphere class="spot-glow" radius="2" position="0 0.5 0"
+      color="#3a1010" material="opacity:0; transparent:true; side:double; shader:flat"></a-sphere>
+  </a-entity>
+
+  <!-- ═══ GENERAL DECORATION ═══ -->
+  <!-- Fallen logs -->
+  <a-cylinder position="-3  0.2  -10" rotation="0  40 90" radius="0.22" height="3.5" color="#140804" material="roughness:1" cast-shadow receive-shadow></a-cylinder>
+  <a-cylinder position=" 6  0.2  -13" rotation="0 -25 90" radius="0.28" height="4"   color="#100604" material="roughness:1" cast-shadow receive-shadow></a-cylinder>
+  <a-cylinder position="-1  0.18 -16" rotation="0  70 90" radius="0.18" height="3"   color="#140804" material="roughness:1" cast-shadow receive-shadow></a-cylinder>
+  <a-cylinder position=" 0  0.18 -22" rotation="0  15 90" radius="0.2"  height="3.5" color="#100604" material="roughness:1" cast-shadow receive-shadow></a-cylinder>
+  <a-cylinder position="-9  0.2  -4"  rotation="0  55 90" radius="0.2"  height="3"   color="#140804" material="roughness:1" cast-shadow receive-shadow></a-cylinder>
+  <!-- Scattered shrubs and ferns -->
+  <a-entity position=" 2  0 -8"  bush-patch="size:1.2; color:#0b1c08"></a-entity>
+  <a-entity position="-2  0 -7"  bush-patch="size:1.0; color:#071608"></a-entity>
+  <a-entity position=" 0  0 -11" bush-patch="size:0.9; color:#0b1c08"></a-entity>
+  <a-entity position=" 7  0 -3"  bush-patch="size:1.1; color:#071608"></a-entity>
+  <a-entity position="-4  0 -3"  bush-patch="size:1.0; color:#0b1c08"></a-entity>
+  <a-entity ground-cover="count:30; spread:8; baseX:0; baseZ:-12; color:#122a0e; size:0.37"></a-entity>
+  <a-entity ground-cover="count:20; spread:5; baseX:-5; baseZ:-5; color:#0f2208; size:0.33"></a-entity>
+  <!-- Fireflies — sparse, moody -->
+  <a-entity position="-5  1.2  -9"  firefly></a-entity>
+  <a-entity position=" 2  1.5  -16" firefly></a-entity>
+  <a-entity position="-2  1.8  -14" firefly></a-entity>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       DEER — tufted deer, grabbable at scene center
+  ═══════════════════════════════════════════════════════════════ -->
   <a-entity
     id="the-deer"
     class="grabbable"
     gltf-model="#deer-model"
-    position="0 0 -1.5"
+    position="0 0 -2"
     scale="0.8 0.8 0.8"
     rotation="0 180 0"
     cast-shadow="true"
     deer-idle>
-
-    <!-- Soft warm highlight so the player can see it's interactive -->
-    <a-light type="point" color="#ffe8c0" intensity="0.6" distance="1.8"></a-light>
-
-    <!-- Grab hint label (fades when grabbed) -->
-    <a-text
-      id="deer-hint"
+    <a-light type="point" color="#7a5830" intensity="0.38" distance="1.5"></a-light>
+    <a-text id="deer-hint"
       value="Hold GRIP to carry"
-      align="center"
-      color="#ffffff"
-      width="2.2"
-      position="0 1.4 0"
-      rotation="0 0 0"
+      align="center" color="#c8a060"
+      width="2.2" position="0 1.4 0"
       look-at="#player-camera">
     </a-text>
   </a-entity>
 
+  <!-- ═══════════════════════════════════════════════════════════
+       LEOPARD — spawns when timer expires
+       NOTE: If leopard appears too large/small, adjust scale here.
+  ═══════════════════════════════════════════════════════════════ -->
+  <a-entity
+    id="the-leopard"
+    gltf-model="#leopard-model"
+    position="0 0 -22"
+    scale="1 1 1"
+    rotation="0 0 0"
+    visible="false"
+    leopard-patrol>
+  </a-entity>
+
 </a-scene>
 
-<!-- ═══════════════════════════════════════════════════════════════════
+<!-- ═══════════════════════════════════════════════════════════════
      COMPONENTS & GAME LOGIC
-═══════════════════════════════════════════════════════════════════ -->
+═══════════════════════════════════════════════════════════════ -->
 <script>
 'use strict';
 
-/* ── Utility ─────────────────────────────────────────────────────────── */
+/* ═══ UTILITIES ═══════════════════════════════════════════════════ */
 function rnd(min, max) { return min + Math.random() * (max - min); }
 
-/* ════════════════════════════════════════════════════════════════════════
-   JUNGLE TREE COMPONENT
-   A procedural tree: trunk + multiple leaf clusters
-════════════════════════════════════════════════════════════════════════ */
+/* ═══ GAME STATE ══════════════════════════════════════════════════ */
+const HIDE_DURATION = 120;
+
+const GameState = {
+  phase: 'hide',            // 'hide' | 'leopard' | 'result'
+  timeLeft: HIDE_DURATION,
+  deerPosition:     { x: 0, y: 0, z: -2 },
+  deerHidingScore:  null,   // 1-5 or null
+  deerHidingSpotId: null    // 1-5 or null
+};
+
+/* ═══ AUDIO SYSTEM ════════════════════════════════════════════════ */
+let _audio = null;
+
+function initAudio() {
+  if (_audio) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') ctx.resume();
+
+    // ── Forest ambient: bandpass-filtered white noise ──
+    const fBuf = ctx.createBuffer(1, ctx.sampleRate * 3, ctx.sampleRate);
+    const fD   = fBuf.getChannelData(0);
+    for (let i = 0; i < fD.length; i++) fD[i] = Math.random() * 2 - 1;
+    const fSrc = ctx.createBufferSource();
+    fSrc.buffer = fBuf; fSrc.loop = true;
+    const fFilt = ctx.createBiquadFilter();
+    fFilt.type = 'bandpass'; fFilt.frequency.value = 550; fFilt.Q.value = 0.4;
+    const fGain = ctx.createGain(); fGain.gain.value = 0.06;
+    fSrc.connect(fFilt); fFilt.connect(fGain); fGain.connect(ctx.destination);
+    fSrc.start();
+
+    // ── River: low-pass white noise ──
+    const rBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+    const rD   = rBuf.getChannelData(0);
+    for (let i = 0; i < rD.length; i++) rD[i] = Math.random() * 2 - 1;
+    const rSrc = ctx.createBufferSource();
+    rSrc.buffer = rBuf; rSrc.loop = true;
+    const rFilt = ctx.createBiquadFilter();
+    rFilt.type = 'lowpass'; rFilt.frequency.value = 320;
+    const rGain = ctx.createGain(); rGain.gain.value = 0.09;
+    rSrc.connect(rFilt); rFilt.connect(rGain); rGain.connect(ctx.destination);
+    rSrc.start();
+
+    // ── Bird calls: periodic chirps ──
+    function scheduleBird() {
+      const delay = rnd(4500, 10000);
+      setTimeout(() => {
+        if (!_audio) return;
+        const osc = ctx.createOscillator();
+        const g   = ctx.createGain();
+        osc.connect(g); g.connect(ctx.destination);
+        const f = rnd(1300, 3400);
+        osc.frequency.setValueAtTime(f, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(f * rnd(0.7, 1.35), ctx.currentTime + 0.13);
+        g.gain.setValueAtTime(0.11, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + rnd(0.1, 0.4));
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.55);
+        scheduleBird();
+      }, delay);
+    }
+    scheduleBird();
+
+    _audio = { ctx, fGain, rGain };
+  } catch(e) { console.warn('[Audio] Web Audio init failed:', e); }
+}
+
+function startTensionRumble() {
+  if (!_audio || _audio._rumble) return;
+  const { ctx } = _audio;
+  const osc  = ctx.createOscillator();
+  osc.type = 'sine'; osc.frequency.value = 36;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.16, ctx.currentTime + 5);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start();
+  _audio._rumble = { osc, gain };
+}
+
+function startLeopardGrowl() {
+  if (!_audio) return;
+  const { ctx } = _audio;
+  const osc    = ctx.createOscillator();
+  osc.type = 'sawtooth'; osc.frequency.value = 52;
+  const filt   = ctx.createBiquadFilter();
+  filt.type = 'lowpass'; filt.frequency.value = 105;
+  const gain   = ctx.createGain();
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.18, ctx.currentTime + 3);
+  // Growl LFO modulation
+  const lfo    = ctx.createOscillator();
+  lfo.frequency.value = 1.9;
+  const lfoG   = ctx.createGain();
+  lfoG.gain.value = 16;
+  lfo.connect(lfoG); lfoG.connect(osc.frequency);
+  lfo.start();
+  osc.connect(filt); filt.connect(gain); gain.connect(ctx.destination);
+  osc.start();
+  _audio._growl = { osc, gain };
+}
+
+/* ═══ UI HELPERS ══════════════════════════════════════════════════ */
+function formatTime(s) {
+  return `${Math.floor(s/60)}:${(s%60).toString().padStart(2,'0')}`;
+}
+function updateTimerUI(s) {
+  const h = document.getElementById('timer-display');
+  const v = document.getElementById('vr-timer');
+  const str = formatTime(s);
+  if (h) h.textContent = str;
+  if (v) v.setAttribute('value', str);
+}
+function setPhaseLabel(text) {
+  const h = document.getElementById('phase-label');
+  const v = document.getElementById('vr-phase');
+  if (h) h.textContent = text;
+  if (v) v.setAttribute('value', text);
+}
+
+function showResult(outcome) {
+  let text, color, bg;
+  if (outcome === 'survived-well') {
+    text  = 'Well hidden!\nThe leopard passed by without\na glance. The deer is safe.';
+    color = '#44ff88'; bg = '#061a0a';
+    setPhaseLabel('The deer survived!');
+  } else if (outcome === 'survived-close') {
+    text  = 'Close call!\nThe leopard hesitated...\nbut moved on. The deer survived.';
+    color = '#ffcc44'; bg = '#16140a';
+    setPhaseLabel('Survived — barely!');
+  } else {
+    text  = 'The deer was found!\nThe leopard detected the deer in\nits exposed hiding spot.';
+    color = '#ff5544'; bg = '#180808';
+    setPhaseLabel('The deer was found!');
+  }
+  document.getElementById('result-bg').setAttribute('color', bg);
+  document.getElementById('result-text').setAttribute('value', text);
+  document.getElementById('result-text').setAttribute('color', color);
+  document.getElementById('result-panel').setAttribute('visible', true);
+}
+
+/* ═══ CAMOUFLAGE ══════════════════════════════════════════════════
+   Traverse the deer's mesh and adjust opacity by score.
+   Score 5 (best spot) = nearly invisible; score 1 = fully visible.
+═══════════════════════════════════════════════════════════════ */
+const CAMO_OPACITY = { 5: 0.28, 4: 0.50, 3: 0.72, 2: 0.88, 1: 1.0, 0: 1.0 };
+
+function setCamouflage(score) {
+  const deer = document.getElementById('the-deer');
+  if (!deer) return;
+  const apply = () => {
+    const opacity = CAMO_OPACITY[score] ?? 1.0;
+    deer.object3D.traverse(child => {
+      if (!child.isMesh) return;
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      mats.forEach(m => {
+        m.transparent = opacity < 1.0;
+        m.opacity     = opacity;
+        m.needsUpdate = true;
+      });
+    });
+  };
+  if (deer.components['gltf-model'] && deer.getObject3D('mesh')) apply();
+  else deer.addEventListener('model-loaded', apply, { once: true });
+}
+
+/* ═══ HIDING SPOT DETECTION ═══════════════════════════════════════
+   After deer is dropped, find nearest hiding spot within its radius.
+═══════════════════════════════════════════════════════════════ */
+function checkHidingSpot(worldPos) {
+  let best = null, bestDist = Infinity;
+  document.querySelectorAll('[hiding-spot]').forEach(el => {
+    const comp = el.components['hiding-spot'];
+    if (!comp) return;
+    const sp = new THREE.Vector3();
+    el.object3D.getWorldPosition(sp);
+    const d = worldPos.distanceTo(sp);
+    if (d < comp.data.radius && d < bestDist) {
+      bestDist = d; best = comp;
+    }
+  });
+  return best;
+}
+
+/* ═══ PLACEMENT FEEDBACK ══════════════════════════════════════════ */
+function showPlaceFeedback(label, score) {
+  const msgs   = { 5:'Perfect cover!', 4:'Good spot!', 3:'Risky cover', 2:'Poor cover!', 1:'Barely hidden!' };
+  const colors = { 5:'#44ff88', 4:'#88ee66', 3:'#ffcc44', 2:'#ff8844', 1:'#ff5544' };
+  const dp = GameState.deerPosition;
+  const msg = document.createElement('a-text');
+  msg.setAttribute('value', `${label}\n${msgs[score]||''}`);
+  msg.setAttribute('color', colors[score] || '#ffffff');
+  msg.setAttribute('align', 'center');
+  msg.setAttribute('width', '2.8');
+  msg.setAttribute('position', `${dp.x} 1.85 ${dp.z}`);
+  msg.setAttribute('look-at', '#player-camera');
+  document.querySelector('a-scene').appendChild(msg);
+  setTimeout(() => msg.parentNode && msg.parentNode.removeChild(msg), 3200);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   JUNGLE TREE — dark tropical canopy
+════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('jungle-tree', {
   schema: {
-    height:     { type: 'number', default: 8 },
-    trunkColor: { type: 'color',  default: '#5a3820' },
-    leafColor:  { type: 'color',  default: '#2d6a1a' },
-    leafSize:   { type: 'number', default: 3.5 }
+    height:     { type:'number', default:8 },
+    trunkColor: { type:'color',  default:'#1c1008' },
+    leafColor:  { type:'color',  default:'#0e1c08' },
+    leafSize:   { type:'number', default:3.5 }
   },
   init() {
-    const d = this.data;
-    const el = this.el;
-    const trunkH = d.height;
-    const trunkR = rnd(0.18, 0.28);
+    const { height:h, trunkColor, leafColor, leafSize:ls } = this.data;
+    const tr = rnd(0.18, 0.30);
 
     // Trunk
     const trunk = document.createElement('a-cylinder');
-    trunk.setAttribute('radius', trunkR);
-    trunk.setAttribute('height', trunkH);
-    trunk.setAttribute('position', `0 ${trunkH / 2} 0`);
-    trunk.setAttribute('color', d.trunkColor);
+    trunk.setAttribute('radius', tr);
+    trunk.setAttribute('height', h);
+    trunk.setAttribute('position', `0 ${h/2} 0`);
+    trunk.setAttribute('color', trunkColor);
     trunk.setAttribute('material', 'roughness:1; metalness:0');
     trunk.setAttribute('cast-shadow', '');
-    trunk.setAttribute('receive-shadow', '');
-    el.appendChild(trunk);
+    this.el.appendChild(trunk);
 
-    // Main canopy sphere
-    const mainLeaf = document.createElement('a-sphere');
-    mainLeaf.setAttribute('radius', d.leafSize);
-    mainLeaf.setAttribute('position', `0 ${trunkH + d.leafSize * 0.6} 0`);
-    mainLeaf.setAttribute('color', d.leafColor);
-    mainLeaf.setAttribute('material', `roughness:1; metalness:0`);
-    mainLeaf.setAttribute('cast-shadow', '');
-    el.appendChild(mainLeaf);
+    // Main canopy — low-poly sphere
+    const main = document.createElement('a-sphere');
+    main.setAttribute('radius', ls);
+    main.setAttribute('position', `0 ${h + ls * 0.55} 0`);
+    main.setAttribute('color', leafColor);
+    main.setAttribute('material', 'roughness:1; metalness:0');
+    main.setAttribute('segments-width', 8);
+    main.setAttribute('segments-height', 6);
+    main.setAttribute('cast-shadow', '');
+    this.el.appendChild(main);
 
     // Secondary canopy blobs for irregular silhouette
-    const offsets = [
-      [rnd(-1.2,1.2), rnd(-0.5,0.5), rnd(-1.2,1.2)],
-      [rnd(-1.5,1.5), rnd(-0.8,0.2), rnd(-1.5,1.5)],
-      [rnd(-1,1),     rnd(0.2,0.8),  rnd(-1,1)],
-    ];
-    offsets.forEach(([ox, oy, oz]) => {
-      const leaf = document.createElement('a-sphere');
-      const sz = d.leafSize * rnd(0.55, 0.8);
-      leaf.setAttribute('radius', sz);
-      leaf.setAttribute('position',
-        `${ox} ${trunkH + d.leafSize * 0.6 + oy} ${oz}`);
-      // Slight color variation
-      const g = parseInt(d.leafColor.slice(3,5), 16);
-      const variant = `#${d.leafColor.slice(1,3)}${Math.min(255,g+rnd(-20,20)|0).toString(16).padStart(2,'0')}${d.leafColor.slice(5,7)}`;
-      leaf.setAttribute('color', d.leafColor);
-      leaf.setAttribute('material', 'roughness:1; metalness:0');
-      leaf.setAttribute('cast-shadow', '');
-      el.appendChild(leaf);
+    [[rnd(-1.4,1.4), rnd(-0.6,0.4), rnd(-1.4,1.4)],
+     [rnd(-1.6,1.6), rnd(-0.9,0.2), rnd(-1.6,1.6)],
+     [rnd(-1.0,1.0), rnd( 0.1,0.7), rnd(-1.0,1.0)]].forEach(([ox,oy,oz]) => {
+      const blob = document.createElement('a-sphere');
+      blob.setAttribute('radius', ls * rnd(0.5, 0.72));
+      blob.setAttribute('position', `${ox} ${h + ls * 0.55 + oy} ${oz}`);
+      blob.setAttribute('color', leafColor);
+      blob.setAttribute('material', 'roughness:1; metalness:0');
+      blob.setAttribute('segments-width', 7);
+      blob.setAttribute('segments-height', 5);
+      blob.setAttribute('cast-shadow', '');
+      this.el.appendChild(blob);
     });
   }
 });
 
-/* ════════════════════════════════════════════════════════════════════════
-   BAMBOO GROVE COMPONENT
-════════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════
+   UNDERSTORY TREE — short, twisted, dense low branching
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('understory-tree', {
+  schema: {
+    height:     { type:'number', default:4 },
+    trunkColor: { type:'color',  default:'#140a06' },
+    leafColor:  { type:'color',  default:'#091608' },
+    leafSize:   { type:'number', default:1.8 }
+  },
+  init() {
+    const { height:h, trunkColor, leafColor, leafSize:ls } = this.data;
+    const tilt = rnd(-14, 14);
+
+    const trunk = document.createElement('a-cylinder');
+    trunk.setAttribute('radius', rnd(0.07, 0.13));
+    trunk.setAttribute('height', h);
+    trunk.setAttribute('position', `0 ${h/2} 0`);
+    trunk.setAttribute('rotation', `${tilt} ${rnd(0,360)} 0`);
+    trunk.setAttribute('color', trunkColor);
+    trunk.setAttribute('material', 'roughness:1');
+    trunk.setAttribute('cast-shadow', '');
+    this.el.appendChild(trunk);
+
+    // Dense canopy blobs close to ground
+    const cy = h * rnd(0.55, 0.72);
+    [[0,0,0],
+     [rnd(-0.7,0.7), rnd(-0.3,0.3), rnd(-0.7,0.7)],
+     [rnd(-0.9,0.9), rnd(-0.5,0.2), rnd(-0.9,0.9)],
+     [rnd(-0.5,0.5), rnd( 0.1,0.4), rnd(-0.5,0.5)]].forEach(([ox,oy,oz]) => {
+      const blob = document.createElement('a-sphere');
+      blob.setAttribute('radius', ls * rnd(0.6, 1.0));
+      blob.setAttribute('position', `${ox} ${cy + oy} ${oz}`);
+      blob.setAttribute('color', leafColor);
+      blob.setAttribute('material', 'roughness:1; metalness:0');
+      blob.setAttribute('segments-width', 7);
+      blob.setAttribute('segments-height', 5);
+      blob.setAttribute('cast-shadow', '');
+      this.el.appendChild(blob);
+    });
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
+   HANGING MOSS
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('hanging-moss', {
+  schema: {
+    length: { type:'number', default:1.5 },
+    count:  { type:'number', default:6 }
+  },
+  init() {
+    const { length, count } = this.data;
+    for (let i = 0; i < count; i++) {
+      const h = length * rnd(0.55, 1.3);
+      const strand = document.createElement('a-cylinder');
+      strand.setAttribute('radius', rnd(0.02, 0.038));
+      strand.setAttribute('height', h);
+      strand.setAttribute('position', `${rnd(-0.45,0.45)} ${-h/2} ${rnd(-0.45,0.45)}`);
+      strand.setAttribute('color', '#1c380a');
+      strand.setAttribute('material', 'roughness:1');
+      this.el.appendChild(strand);
+    }
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
+   BAMBOO GROVE
+════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('bamboo-grove', {
   schema: {
-    count:  { type: 'number', default: 10 },
-    spread: { type: 'number', default: 2 },
-    baseX:  { type: 'number', default: 0 },
-    baseZ:  { type: 'number', default: 0 }
+    count:  { type:'number', default:10 },
+    spread: { type:'number', default:2 },
+    baseX:  { type:'number', default:0 },
+    baseZ:  { type:'number', default:0 }
   },
   init() {
     const { count, spread, baseX, baseZ } = this.data;
@@ -364,258 +720,254 @@ AFRAME.registerComponent('bamboo-grove', {
       const x = baseX + rnd(-spread, spread);
       const z = baseZ + rnd(-spread, spread);
       const h = rnd(5, 9);
-      const r = rnd(0.04, 0.07);
-      const tilt = rnd(-4, 4);
-
+      const r = rnd(0.04, 0.065);
       const stalk = document.createElement('a-cylinder');
       stalk.setAttribute('radius', r);
       stalk.setAttribute('height', h);
       stalk.setAttribute('position', `${x} ${h/2} ${z}`);
-      stalk.setAttribute('rotation', `${tilt} ${rnd(0,360)} 0`);
-      stalk.setAttribute('color', '#7aaa30');
-      stalk.setAttribute('material', 'roughness:0.8; metalness:0');
+      stalk.setAttribute('rotation', `${rnd(-5,5)} ${rnd(0,360)} 0`);
+      stalk.setAttribute('color', '#3a6014');
+      stalk.setAttribute('material', 'roughness:0.8');
       stalk.setAttribute('cast-shadow', '');
-      this.el.sceneEl.appendChild(stalk);
-
-      // Nodes (rings on bamboo)
-      for (let j = 1; j < Math.floor(h); j++) {
-        const node = document.createElement('a-torus');
-        node.setAttribute('radius', r * 1.4);
-        node.setAttribute('radius-tubular', r * 0.3);
-        node.setAttribute('position', `${x} ${j} ${z}`);
-        node.setAttribute('rotation', `${tilt} 0 0`);
-        node.setAttribute('color', '#5a8820');
-        node.setAttribute('material', 'roughness:0.9');
-        this.el.sceneEl.appendChild(node);
-      }
-
-      // Leaf tufts at top
+      this.el.appendChild(stalk);
       const leaf = document.createElement('a-sphere');
-      leaf.setAttribute('radius', rnd(0.3, 0.5));
-      leaf.setAttribute('position', `${x + rnd(-0.3,0.3)} ${h + 0.2} ${z + rnd(-0.3,0.3)}`);
-      leaf.setAttribute('scale', `${rnd(2,3)} ${rnd(0.3,0.5)} ${rnd(2,3)}`);
-      leaf.setAttribute('color', '#4a9a20');
+      leaf.setAttribute('radius', rnd(0.22, 0.38));
+      leaf.setAttribute('position', `${x + rnd(-0.2,0.2)} ${h+0.12} ${z + rnd(-0.2,0.2)}`);
+      leaf.setAttribute('scale', `${rnd(2,3)} ${rnd(0.22,0.38)} ${rnd(2,3)}`);
+      leaf.setAttribute('color', '#284e10');
       leaf.setAttribute('material', 'roughness:1');
-      this.el.sceneEl.appendChild(leaf);
+      this.el.appendChild(leaf);
     }
   }
 });
 
-/* ════════════════════════════════════════════════════════════════════════
-   BUSH PATCH COMPONENT
-════════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════
+   BUSH PATCH — cluster of dark blobs
+════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('bush-patch', {
   schema: {
-    size:  { type: 'number', default: 1.2 },
-    color: { type: 'color',  default: '#1a6010' }
+    size:  { type:'number', default:1.2 },
+    color: { type:'color',  default:'#0b1c08' }
   },
   init() {
     const { size, color } = this.data;
-    const count = Math.floor(rnd(4, 7));
-    for (let i = 0; i < count; i++) {
+    const n = Math.floor(rnd(4, 7));
+    for (let i = 0; i < n; i++) {
       const blob = document.createElement('a-sphere');
       const r = size * rnd(0.35, 0.65);
-      const ox = rnd(-size * 0.5, size * 0.5);
-      const oz = rnd(-size * 0.5, size * 0.5);
-      const oy = r * rnd(0.4, 0.7);
       blob.setAttribute('radius', r);
-      blob.setAttribute('position', `${ox} ${oy} ${oz}`);
+      blob.setAttribute('position', `${rnd(-size*0.5,size*0.5)} ${r*rnd(0.4,0.7)} ${rnd(-size*0.5,size*0.5)}`);
       blob.setAttribute('color', color);
       blob.setAttribute('material', 'roughness:1; metalness:0');
+      blob.setAttribute('segments-width', 7);
+      blob.setAttribute('segments-height', 5);
       blob.setAttribute('cast-shadow', '');
-      blob.setAttribute('receive-shadow', '');
       this.el.appendChild(blob);
     }
   }
 });
 
-/* ════════════════════════════════════════════════════════════════════════
-   GROUND COVER / FERNS
-════════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════
+   GROUND COVER / FERNS  (local coords — works as child or standalone)
+════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('ground-cover', {
   schema: {
-    count:  { type: 'number', default: 15 },
-    spread: { type: 'number', default: 4 },
-    baseX:  { type: 'number', default: 0 },
-    baseZ:  { type: 'number', default: 0 },
-    color:  { type: 'color',  default: '#2a7a15' },
-    size:   { type: 'number', default: 0.4 }
+    count:  { type:'number', default:15 },
+    spread: { type:'number', default:4 },
+    baseX:  { type:'number', default:0 },
+    baseZ:  { type:'number', default:0 },
+    color:  { type:'color',  default:'#122a0e' },
+    size:   { type:'number', default:0.38 }
   },
   init() {
     const { count, spread, baseX, baseZ, color, size } = this.data;
     for (let i = 0; i < count; i++) {
       const x = baseX + rnd(-spread, spread);
       const z = baseZ + rnd(-spread, spread);
-      // Cross-billboard fern: two quads crossing at 90°
       [0, 90].forEach(ry => {
         const frond = document.createElement('a-plane');
         frond.setAttribute('width',  size * rnd(0.8, 1.4));
         frond.setAttribute('height', size * rnd(0.8, 1.3));
         frond.setAttribute('position', `${x} ${size * 0.4} ${z}`);
-        frond.setAttribute('rotation', `0 ${ry + rnd(-20, 20)} 0`);
+        frond.setAttribute('rotation', `0 ${ry + rnd(-20,20)} 0`);
         frond.setAttribute('color', color);
         frond.setAttribute('material', 'side:double; roughness:1; metalness:0');
-        this.el.sceneEl.appendChild(frond);
+        this.el.appendChild(frond);
       });
     }
   }
 });
 
-/* ════════════════════════════════════════════════════════════════════════
-   VINE COMPONENT
-════════════════════════════════════════════════════════════════════════ */
-AFRAME.registerComponent('vine', {
+/* ════════════════════════════════════════════════════════════════
+   REED PATCH — tall thin reeds for river bank
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('reed-patch', {
   schema: {
-    length: { type: 'number', default: 3 },
-    baseX:  { type: 'number', default: 0 },
-    baseY:  { type: 'number', default: 7 },
-    baseZ:  { type: 'number', default: 0 }
+    count:  { type:'number', default:18 },
+    spread: { type:'number', default:1.8 },
+    color:  { type:'color',  default:'#153a12' }
   },
   init() {
-    const { length, baseX, baseY, baseZ } = this.data;
-    const segments = Math.floor(length / 0.4);
-    for (let i = 0; i < segments; i++) {
-      const seg = document.createElement('a-cylinder');
-      seg.setAttribute('radius', 0.025);
-      seg.setAttribute('height', 0.4);
-      seg.setAttribute('position', `${baseX + rnd(-0.05,0.05)} ${baseY - i * 0.4} ${baseZ + rnd(-0.05,0.05)}`);
-      seg.setAttribute('color', '#3a6a10');
-      seg.setAttribute('material', 'roughness:1');
-      this.el.sceneEl.appendChild(seg);
-
-      // Occasional leaf
-      if (i % 3 === 0) {
-        const leaf = document.createElement('a-plane');
-        leaf.setAttribute('width', 0.25);
-        leaf.setAttribute('height', 0.18);
-        leaf.setAttribute('position', `${baseX + rnd(-0.15,0.15)} ${baseY - i * 0.4} ${baseZ + rnd(-0.15,0.15)}`);
-        leaf.setAttribute('rotation', `${rnd(-30,30)} ${rnd(0,360)} ${rnd(-20,20)}`);
-        leaf.setAttribute('color', '#4a8a20');
-        leaf.setAttribute('material', 'side:double; roughness:1');
-        this.el.sceneEl.appendChild(leaf);
-      }
+    const { count, spread, color } = this.data;
+    for (let i = 0; i < count; i++) {
+      const x = rnd(-spread, spread);
+      const z = rnd(-spread, spread);
+      const h = rnd(0.85, 2.0);
+      const r = rnd(0.022, 0.048);
+      const stalk = document.createElement('a-cylinder');
+      stalk.setAttribute('radius', r);
+      stalk.setAttribute('height', h);
+      stalk.setAttribute('position', `${x} ${h/2} ${z}`);
+      stalk.setAttribute('rotation', `${rnd(-10,10)} ${rnd(0,360)} 0`);
+      stalk.setAttribute('color', color);
+      stalk.setAttribute('material', 'roughness:1');
+      this.el.appendChild(stalk);
+      // Reed head
+      const head = document.createElement('a-sphere');
+      head.setAttribute('radius', r * 2.4);
+      head.setAttribute('position', `${x} ${h - 0.04} ${z}`);
+      head.setAttribute('scale', '1 2.4 1');
+      head.setAttribute('color', '#241608');
+      head.setAttribute('material', 'roughness:1');
+      head.setAttribute('segments-width', 6);
+      head.setAttribute('segments-height', 4);
+      this.el.appendChild(head);
     }
   }
 });
 
-/* ════════════════════════════════════════════════════════════════════════
-   FIREFLY COMPONENT  – small glowing light that floats gently
-════════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════
+   WILLOW PLANT — drooping branches for riparian zone
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('willow-plant', {
+  schema: {
+    height: { type:'number', default:3 },
+    spread: { type:'number', default:2 }
+  },
+  init() {
+    const { height:h, spread } = this.data;
+    const trunk = document.createElement('a-cylinder');
+    trunk.setAttribute('radius', 0.065);
+    trunk.setAttribute('height', h);
+    trunk.setAttribute('position', `0 ${h/2} 0`);
+    trunk.setAttribute('color', '#160e06');
+    trunk.setAttribute('material', 'roughness:1');
+    this.el.appendChild(trunk);
+    // Drooping fronds
+    for (let i = 0; i < 9; i++) {
+      const angle = (i / 9) * Math.PI * 2;
+      const ex = Math.sin(angle) * spread * 0.52;
+      const ez = Math.cos(angle) * spread * 0.52;
+      const fH  = rnd(h * 0.5, h * 0.85);
+      const frond = document.createElement('a-cylinder');
+      frond.setAttribute('radius', 0.017);
+      frond.setAttribute('height', fH);
+      frond.setAttribute('position', `${ex * 0.45} ${h - fH * 0.28} ${ez * 0.45}`);
+      frond.setAttribute('rotation', `${rnd(45,65)} ${(angle * 180 / Math.PI)} 0`);
+      frond.setAttribute('color', '#142808');
+      frond.setAttribute('material', 'roughness:1');
+      this.el.appendChild(frond);
+    }
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
+   FIREFLY — floating glow point
+════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('firefly', {
   init() {
-    // Tiny glowing dot
     const dot = document.createElement('a-sphere');
-    dot.setAttribute('radius', 0.035);
-    dot.setAttribute('color', '#eeffaa');
-    dot.setAttribute('material', 'emissive:#ccff88; emissiveIntensity:1.5');
+    dot.setAttribute('radius', 0.028);
+    dot.setAttribute('color', '#c8f070');
+    dot.setAttribute('material', 'emissive:#98c840; emissiveIntensity:1.2');
+    dot.setAttribute('segments-width', 5);
+    dot.setAttribute('segments-height', 4);
     this.el.appendChild(dot);
-
-    // Point light
     const light = document.createElement('a-light');
     light.setAttribute('type', 'point');
-    light.setAttribute('color', '#ccff88');
-    light.setAttribute('intensity', 0.3);
-    light.setAttribute('distance', 2.5);
+    light.setAttribute('color', '#98c840');
+    light.setAttribute('intensity', 0.18);
+    light.setAttribute('distance', 1.8);
     this.el.appendChild(light);
-
-    // Floating animation params
-    this._t = Math.random() * Math.PI * 2;
-    this._origin = { ...this.el.object3D.position };
-    this._speed  = rnd(0.4, 0.9);
-    this._radius = rnd(0.15, 0.35);
+    this._t     = Math.random() * Math.PI * 2;
+    this._speed = rnd(0.3, 0.8);
   },
-  tick(time) {
-    this._t += 0.008 * this._speed;
+  tick() {
+    this._t += 0.007 * this._speed;
     const t = this._t;
-    const pos = this.el.getAttribute('position');
-    const ox = parseFloat(this.el.getAttribute('position').x) || 0;
-    this.el.object3D.position.x += Math.sin(t * 1.3) * 0.003;
-    this.el.object3D.position.y += Math.sin(t) * 0.004;
-    this.el.object3D.position.z += Math.cos(t * 0.9) * 0.003;
+    this.el.object3D.position.x += Math.sin(t * 1.2)  * 0.0024;
+    this.el.object3D.position.y += Math.sin(t)         * 0.0030;
+    this.el.object3D.position.z += Math.cos(t * 0.85)  * 0.0024;
   }
 });
 
-/* ════════════════════════════════════════════════════════════════════════
-   GAME TIMER (Phase 1 – counting down 120 s)
-════════════════════════════════════════════════════════════════════════ */
-const HIDE_DURATION = 120; // seconds
-
-const GameState = {
-  phase: 'hide',    // 'hide' | 'wait' | 'leopard' | 'result'
-  timeLeft: HIDE_DURATION,
-  lastTick: null,
-  deerPosition: { x: 0, y: 0, z: -1.5 }   // updated each time deer is released
-};
-
-function formatTime(s) {
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return `${m}:${sec.toString().padStart(2, '0')}`;
-}
-
-function updateTimerUI(seconds) {
-  const html  = document.getElementById('timer-display');
-  const vrEl  = document.getElementById('vr-timer');
-  const str   = formatTime(seconds);
-  if (html)  html.textContent = str;
-  if (vrEl)  vrEl.setAttribute('value', str);
-}
-
-function setPhaseLabel(text) {
-  const html = document.getElementById('phase-label');
-  const vr   = document.getElementById('vr-phase');
-  if (html) html.textContent = text;
-  if (vr)   vr.setAttribute('value', text);
-}
-
-// Tick every second using A-Frame scene tick
-AFRAME.registerComponent('game-manager', {
-  init() {
-    this._lastSec = null;
-    GameState.lastTick = performance.now();
+/* ════════════════════════════════════════════════════════════════
+   HIDING SPOT
+   — glows when player controller / head comes within 3.5 m
+   — activate() / deactivate() called by grabber on drop
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('hiding-spot', {
+  schema: {
+    score:  { type:'number', default:1 },
+    label:  { type:'string', default:'Hiding Spot' },
+    radius: { type:'number', default:1.5 },
+    spotId: { type:'number', default:0 }
   },
-  tick(time) {
+  init() {
+    this._sPos  = new THREE.Vector3();
+    this._ePos  = new THREE.Vector3();
+    this._glow  = null;
+    this._prevOp = -1;
+  },
+  _getGlow() {
+    if (!this._glow) this._glow = this.el.querySelector('.spot-glow');
+    return this._glow;
+  },
+  activate(score) {
+    GameState.deerHidingScore  = score;
+    GameState.deerHidingSpotId = this.data.spotId;
+    const g = this._getGlow();
+    if (g) g.setAttribute('material', 'opacity:0.20; transparent:true; side:double; shader:flat');
+    console.log(`[Spot ${this.data.spotId}] Deer placed — ${this.data.label} (score ${score})`);
+  },
+  deactivate() {
+    GameState.deerHidingScore  = null;
+    GameState.deerHidingSpotId = null;
+    const g = this._getGlow();
+    if (g) g.setAttribute('material', 'opacity:0; transparent:true; side:double; shader:flat');
+  },
+  tick() {
     if (GameState.phase !== 'hide') return;
-
-    const nowSec = Math.floor(time / 1000);
-    if (this._lastSec === nowSec) return;
-    this._lastSec = nowSec;
-
-    const elapsed = Math.floor(time / 1000);
-    const remaining = Math.max(0, HIDE_DURATION - elapsed);
-    GameState.timeLeft = remaining;
-    updateTimerUI(remaining);
-
-    if (remaining <= 10 && remaining > 0) {
-      // Flash timer red when near end
-      const vrTimer = document.getElementById('vr-timer');
-      if (vrTimer) vrTimer.setAttribute('color', remaining % 2 === 0 ? '#ff4444' : '#ffe080');
-    }
-
-    if (remaining === 0) {
-      GameState.phase = 'leopard';
-      setPhaseLabel('The leopard is hunting...');
-      updateTimerUI(0);
-      // Leopard logic will be added in the next step
-      console.log('[Game] Timer expired – leopard phase begins');
+    const g = this._getGlow();
+    if (!g) return;
+    this.el.object3D.getWorldPosition(this._sPos);
+    let minDist = Infinity;
+    ['left-controller', 'right-controller', 'player-camera'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.object3D.getWorldPosition(this._ePos);
+      const d = this._ePos.distanceTo(this._sPos);
+      if (d < minDist) minDist = d;
+    });
+    const DIST = 3.5;
+    const op = minDist < DIST
+      ? parseFloat((Math.max(0, 1 - minDist / DIST) * 0.30).toFixed(3))
+      : 0;
+    if (Math.abs(op - this._prevOp) > 0.006) {
+      this._prevOp = op;
+      g.setAttribute('material', `opacity:${op}; transparent:true; side:double; shader:flat`);
     }
   }
 });
 
-// Attach game-manager to scene
-document.querySelector('a-scene').setAttribute('game-manager', '');
-
-/* ════════════════════════════════════════════════════════════════════════
+/* ════════════════════════════════════════════════════════════════
    DEER IDLE ANIMATION
-   Gentle breathing (scale pulse) + slow left-right head sway.
-   Uses THREE.js directly so it works without a separate animation lib.
-════════════════════════════════════════════════════════════════════════ */
+════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('deer-idle', {
   init() {
-    this._t = 0;
-    this._baseScale = null;  // captured after model loads
+    this._t         = 0;
     this._grabbed   = false;
-
+    this._baseScale = null;
     this.el.addEventListener('model-loaded', () => {
       this._baseScale = this.el.object3D.scale.clone();
     });
@@ -623,138 +975,253 @@ AFRAME.registerComponent('deer-idle', {
   setGrabbed(v) { this._grabbed = v; },
   tick(time, dt) {
     if (this._grabbed || !this._baseScale) return;
-    this._t += dt * 0.001;           // convert ms → seconds
-    const t = this._t;
-
-    // Breathing: gentle ±1.5% scale pulse at ~0.3 Hz
-    const breathe = 1 + Math.sin(t * 1.9) * 0.015;
+    this._t += dt * 0.001;
+    const b = 1 + Math.sin(this._t * 1.9) * 0.015;
     this.el.object3D.scale.set(
-      this._baseScale.x * breathe,
-      this._baseScale.y * breathe,
-      this._baseScale.z * breathe
+      this._baseScale.x * b,
+      this._baseScale.y * b,
+      this._baseScale.z * b
     );
-
-    // Subtle head-bob in Y (±1 cm at ~0.2 Hz)
-    this.el.object3D.position.y = Math.sin(t * 1.2) * 0.01;
+    this.el.object3D.position.y = Math.sin(this._t * 1.2) * 0.01;
   }
 });
 
-/* ════════════════════════════════════════════════════════════════════════
-   GRABBER COMPONENT
-   Attach to each controller. Listens for gripdown / gripup (Quest 2
-   grip button). When grip is pressed and the deer is within reach,
-   parents the deer to this controller so it follows the hand.
-   On release it unparents and snaps the deer to the floor.
-
-   Grab radius: 0.7 m  (close enough to feel physical, forgiving enough
-   to work with the model's bounding box).
-════════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════
+   GRABBER
+   Quest 2 GRIP button grabs deer when within 0.95 m.
+   On release: snap to floor, check hiding spot, apply camouflage.
+════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('grabber', {
-  schema: { hand: { type: 'string', default: 'right' } },
-
+  schema: { hand: { type:'string', default:'right' } },
   init() {
-    this._holding     = null;   // currently held entity
-    this._prevParent  = null;   // original parent to restore on release
-    this._grabOffset  = new THREE.Vector3();
-    this._grabQuat    = new THREE.Quaternion();
-    this._worldPos    = new THREE.Vector3();
-
-    // Quest 2 grip button events
-    this.el.addEventListener('gripdown',   this._onGripDown.bind(this));
-    this.el.addEventListener('gripup',     this._onGripUp.bind(this));
-
-    // Also support trigger for desktop testing
-    this.el.addEventListener('triggerdown', this._onGripDown.bind(this));
-    this.el.addEventListener('triggerup',   this._onGripUp.bind(this));
+    this._holding    = null;
+    this._prevParent = null;
+    this._offset     = new THREE.Vector3();
+    this.el.addEventListener('gripdown',    this._onDown.bind(this));
+    this.el.addEventListener('gripup',      this._onUp.bind(this));
+    this.el.addEventListener('triggerdown', this._onDown.bind(this));
+    this.el.addEventListener('triggerup',   this._onUp.bind(this));
+    // Start audio on first controller press
+    this.el.addEventListener('gripdown',    initAudio, { once: true });
+    this.el.addEventListener('triggerdown', initAudio, { once: true });
   },
-
-  _onGripDown() {
+  _onDown() {
     if (GameState.phase !== 'hide') return;
-    if (this._holding) return;               // already holding something
-
+    if (this._holding) return;
     const deer = document.getElementById('the-deer');
     if (!deer) return;
+    const cp = new THREE.Vector3(), dp = new THREE.Vector3();
+    this.el.object3D.getWorldPosition(cp);
+    deer.object3D.getWorldPosition(dp);
+    if (cp.distanceTo(dp) > 0.95) return;
 
-    // Distance check in world space
-    const ctrlPos = new THREE.Vector3();
-    const deerPos = new THREE.Vector3();
-    this.el.object3D.getWorldPosition(ctrlPos);
-    deer.object3D.getWorldPosition(deerPos);
-
-    if (ctrlPos.distanceTo(deerPos) > 0.9) return;  // too far
-
-    // ── Grab! ────────────────────────────────────────────────────────
     this._holding = deer;
-
-    // Hide the hint label
     const hint = document.getElementById('deer-hint');
     if (hint) hint.setAttribute('visible', false);
-
-    // Tell the idle component to stop animating while held
     if (deer.components['deer-idle']) deer.components['deer-idle'].setGrabbed(true);
 
-    // Compute offset so the deer doesn't snap to controller origin
-    const ctrlWorldInv = new THREE.Matrix4();
+    // Deactivate hiding spot if deer was already there
+    if (GameState.deerHidingSpotId !== null) {
+      const se = document.getElementById(`spot${GameState.deerHidingSpotId}`);
+      if (se && se.components['hiding-spot']) se.components['hiding-spot'].deactivate();
+    }
+    setCamouflage(0);
+
+    // Grab offset in controller local space
     this.el.object3D.updateMatrixWorld();
-    ctrlWorldInv.copy(this.el.object3D.matrixWorld).invert();
-
-    deer.object3D.getWorldPosition(deerPos);
-    this._grabOffset.copy(deerPos).applyMatrix4(ctrlWorldInv);
-
-    // Reparent deer → controller
+    const inv = new THREE.Matrix4().copy(this.el.object3D.matrixWorld).invert();
+    deer.object3D.getWorldPosition(dp);
+    this._offset.copy(dp).applyMatrix4(inv);
     this._prevParent = deer.parentNode;
     this.el.appendChild(deer);
-
-    // Apply local offset so it stays in place visually
-    deer.object3D.position.copy(this._grabOffset);
-
-    console.log(`[Grabber] ${this.data.hand} grabbed the deer`);
+    deer.object3D.position.copy(this._offset);
   },
-
-  _onGripUp() {
+  _onUp() {
     if (!this._holding) return;
     const deer = this._holding;
     this._holding = null;
-
-    // Get deer world position before reparenting
-    const worldPos = new THREE.Vector3();
-    deer.object3D.getWorldPosition(worldPos);
-
-    const worldQuat = new THREE.Quaternion();
-    deer.object3D.getWorldQuaternion(worldQuat);
-
-    // Restore to scene root
-    const scene = document.querySelector('a-scene');
-    if (this._prevParent && this._prevParent !== scene) {
-      this._prevParent.appendChild(deer);
-    } else {
-      scene.appendChild(deer);
-    }
-
-    // Snap Y to ground (floor = y 0), keep XZ from world pos
-    worldPos.y = 0;
-    deer.setAttribute('position', {
-      x: worldPos.x,
-      y: worldPos.y,
-      z: worldPos.z
-    });
-
-    // Restore world rotation
-    deer.object3D.quaternion.copy(worldQuat);
-
-    // Resume idle animation
+    const wp = new THREE.Vector3(), wq = new THREE.Quaternion();
+    deer.object3D.getWorldPosition(wp);
+    deer.object3D.getWorldQuaternion(wq);
+    // Reparent to scene root
+    document.querySelector('a-scene').appendChild(deer);
+    wp.y = 0;
+    deer.setAttribute('position', { x: wp.x, y: 0, z: wp.z });
+    deer.object3D.quaternion.copy(wq);
     if (deer.components['deer-idle']) deer.components['deer-idle'].setGrabbed(false);
-
-    // Show hint again (so player knows they can grab again)
     const hint = document.getElementById('deer-hint');
     if (hint) hint.setAttribute('visible', true);
-
-    // Record final deer position for the leopard phase
-    GameState.deerPosition = { x: worldPos.x, y: 0, z: worldPos.z };
-    console.log(`[Grabber] ${this.data.hand} released deer at`, GameState.deerPosition);
+    // Hiding spot check
+    const spotComp = checkHidingSpot(wp);
+    if (spotComp) {
+      spotComp.activate(spotComp.data.score);
+      setCamouflage(spotComp.data.score);
+      showPlaceFeedback(spotComp.data.label, spotComp.data.score);
+    } else {
+      GameState.deerHidingScore  = 0;
+      GameState.deerHidingSpotId = null;
+      setCamouflage(0);
+    }
+    GameState.deerPosition = { x: wp.x, y: 0, z: wp.z };
+    console.log(`[Grabber:${this.data.hand}] Released deer at`, GameState.deerPosition);
   }
 });
 
+/* ════════════════════════════════════════════════════════════════
+   LEOPARD PATROL
+   Enters from the tree line (Z = -22), patrols worst → best spots.
+   Patrol order: 5 (open) → 4 (corridor) → 3 (rocks) → 2 (river) → 1 (deep)
+   If deer is at score ≤ 2 spot when leopard arrives → caught.
+   Score 3 → hesitates, slows.  Score 4-5 → passes by.
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('leopard-patrol', {
+  init() {
+    this._active = false;
+    this._idx    = 0;
+    this._speed  = 1.2;   // m/s
+    this._waypoints = [
+      { x:  0,   z: -22,  spotId: null },  // spawn
+      { x:  1,   z:  -6,  spotId: 5    },  // spot 5 — open floor
+      { x: -4,   z:  -9,  spotId: 4    },  // spot 4 — corridor
+      { x:  9,   z: -10,  spotId: 3    },  // spot 3 — rocky gully
+      { x:  3.5, z: -14,  spotId: 2    },  // spot 2 — river bank
+      { x: -7,   z: -13,  spotId: 1    },  // spot 1 — deep undergrowth
+    ];
+    this._checked = new Set();
+  },
+  start() {
+    const p = this._waypoints[0];
+    this.el.setAttribute('position', `${p.x} 0 ${p.z}`);
+    this.el.setAttribute('visible', true);
+    this._active = true;
+    this._idx    = 1;
+    startLeopardGrowl();
+  },
+  tick(time, dt) {
+    if (!this._active) return;
+    const tgt = this._waypoints[this._idx];
+    if (!tgt) return;
+    const pos = this.el.object3D.position;
+    const dx = tgt.x - pos.x;
+    const dz = tgt.z - pos.z;
+    const dist = Math.sqrt(dx*dx + dz*dz);
+    if (dist < 0.35) {
+      // Arrived at waypoint
+      if (tgt.spotId !== null && !this._checked.has(tgt.spotId)) {
+        this._checked.add(tgt.spotId);
+        this._evalSpot(tgt.spotId);
+        if (!this._active) return;
+      }
+      this._idx++;
+      if (this._idx >= this._waypoints.length) {
+        this._active = false;
+        if (GameState.phase === 'leopard') {
+          GameState.phase = 'result';
+          const s = GameState.deerHidingScore || 0;
+          showResult(s >= 4 ? 'survived-well' : s === 3 ? 'survived-close' : 'survived-well');
+        }
+      }
+    } else {
+      const mv = this._speed * (dt / 1000);
+      pos.x += (dx / dist) * mv;
+      pos.z += (dz / dist) * mv;
+      this.el.object3D.rotation.y = Math.atan2(dx, dz);
+    }
+  },
+  _evalSpot(spotId) {
+    if (GameState.deerHidingSpotId !== spotId) return; // deer not here
+    const score = GameState.deerHidingScore || 0;
+    if (score <= 2) {
+      // CAUGHT
+      this._active = false;
+      GameState.phase = 'result';
+      const dp = GameState.deerPosition;
+      this.el.setAttribute('animation',
+        `property:position; to:${dp.x} 0 ${dp.z}; dur:1400; easing:easeInCubic`);
+      setTimeout(() => showResult('caught'), 2000);
+    } else if (score === 3) {
+      // Hesitates — slow down near this spot
+      const prev = this._speed;
+      this._speed = 0.28;
+      setTimeout(() => { this._speed = prev; }, 2600);
+    }
+    // Score 4-5: leopard passes by without detecting
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
+   INTRO PANEL — auto-dismisses after 14 s
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('intro-panel', {
+  init() {
+    setTimeout(() => this.el.setAttribute('visible', false), 14000);
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
+   GAME MANAGER — countdown, tension at 30 s, leopard trigger
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('game-manager', {
+  init() {
+    this._lastSec  = null;
+    this._tension  = false;
+  },
+  tick(time) {
+    if (GameState.phase !== 'hide') return;
+    const nowSec = Math.floor(time / 1000);
+    if (this._lastSec === nowSec) return;
+    this._lastSec = nowSec;
+
+    const rem = Math.max(0, HIDE_DURATION - nowSec);
+    GameState.timeLeft = rem;
+    updateTimerUI(rem);
+
+    // ── Tension at 30 s ──
+    if (rem <= 30 && !this._tension) {
+      this._tension = true;
+      setPhaseLabel('Something is approaching...');
+      // Darken ambient light slightly
+      const al = document.getElementById('ambient-light');
+      if (al) al.setAttribute('light', 'intensity:0.20; color:#0f1608');
+      // Denser fog
+      document.querySelector('a-scene').setAttribute('fog',
+        'type:exponential; color:#080c06; density:0.090');
+      startTensionRumble();
+    }
+
+    // ── Flash timer in final 10 s ──
+    if (rem <= 10 && rem > 0) {
+      const vt = document.getElementById('vr-timer');
+      if (vt) vt.setAttribute('color', rem % 2 === 0 ? '#ff4444' : '#ffe080');
+      const ov = document.getElementById('ui-overlay');
+      if (ov) ov.className = rem % 2 === 0 ? 'urgent' : '';
+    }
+
+    // ── Timer expired ──
+    if (rem === 0) {
+      GameState.phase = 'leopard';
+      setPhaseLabel('The leopard is here!');
+      updateTimerUI(0);
+      const ov = document.getElementById('ui-overlay');
+      if (ov) ov.className = 'urgent';
+      const hint = document.getElementById('deer-hint');
+      if (hint) hint.setAttribute('visible', false);
+      setTimeout(() => {
+        const leo = document.getElementById('the-leopard');
+        if (leo && leo.components['leopard-patrol'])
+          leo.components['leopard-patrol'].start();
+      }, 2500);
+    }
+  }
+});
+
+// Attach game manager
+document.querySelector('a-scene').setAttribute('game-manager', '');
+
+// Start audio on XR entry (Quest 2 requires user gesture)
+document.querySelector('a-scene').addEventListener('enter-vr', () => {
+  setTimeout(initAudio, 400);
+});
 </script>
 </body>
 </html>
