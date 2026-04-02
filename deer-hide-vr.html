@@ -1038,10 +1038,10 @@ AFRAME.registerComponent('spot-label', {
 
     // Background panel
     const bg = document.createElement('a-plane');
-    bg.setAttribute('width',    '4.4');
-    bg.setAttribute('height',   '0.72');
+    bg.setAttribute('width',    '2.6');
+    bg.setAttribute('height',   '0.46');
     bg.setAttribute('color',    '#000000');
-    bg.setAttribute('material', 'opacity:0.62; transparent:true; shader:flat');
+    bg.setAttribute('material', 'opacity:1; transparent:false; shader:flat');
     bg.setAttribute('position', '0 0 -0.01');
     this.el.appendChild(bg);
 
@@ -1056,17 +1056,18 @@ AFRAME.registerComponent('spot-label', {
     this.el.appendChild(txt);
   },
   _fixDepth() {
-    let found = false;
+    let count = 0;
     this.el.object3D.traverse(obj => {
       if (obj.material) {
-        obj.material.depthTest  = false;
-        obj.material.depthWrite = false;
-        obj.renderOrder         = 999;
+        obj.material.depthTest   = false;
+        obj.material.depthWrite  = false;
+        obj.renderOrder          = 999;
         obj.material.needsUpdate = true;
-        found = true;
+        count++;
       }
     });
-    if (found) this._depthFixed = true;
+    // Only stop retrying once both the bg panel mesh AND the text mesh are fixed
+    if (count >= 2) this._depthFixed = true;
   },
   tick() {
     // Fix depth on first frame materials are available
