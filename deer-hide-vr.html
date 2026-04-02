@@ -35,8 +35,8 @@
   <!-- ═══════════════════════════════════════════════════════════════════
        ASSETS
   ═══════════════════════════════════════════════════════════════════ -->
-  <a-assets timeout="10000">
-    <!-- Procedural textures are generated in JS; no external images needed -->
+  <a-assets timeout="30000">
+    <a-asset-item id="deer-model" src="Models/muntjac-or-tufted-deer/source/model.glb"></a-asset-item>
   </a-assets>
 
   <!-- ═══════════════════════════════════════════════════════════════════
@@ -49,20 +49,18 @@
       look-controls="pointerLockEnabled: false">
     </a-camera>
 
-    <!-- Left controller -->
+    <!-- Left controller – shows Quest 2 model, grip-grab support -->
     <a-entity
       id="left-controller"
-      laser-controls="hand: left"
-      raycaster="objects: .grabbable, .highlight-spot; far: 3; showLine: false"
-      oculus-touch-controls="hand: left">
+      oculus-touch-controls="hand: left; model: true"
+      grabber="hand: left">
     </a-entity>
 
-    <!-- Right controller -->
+    <!-- Right controller – shows Quest 2 model, grip-grab support -->
     <a-entity
       id="right-controller"
-      laser-controls="hand: right"
-      raycaster="objects: .grabbable, .highlight-spot; far: 3; showLine: false"
-      oculus-touch-controls="hand: right">
+      oculus-touch-controls="hand: right; model: true"
+      grabber="hand: right">
     </a-entity>
   </a-entity>
 
@@ -245,6 +243,37 @@
       value="HIDE THE DEER!" align="center"
       color="#aaffaa" width="3" font="monoid"
       position="0 -0.1 0.01">
+    </a-text>
+  </a-entity>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       TUFTED DEER  – grabbable with Quest 2 controllers
+       Placed 1.5 m in front of the player on the dirt path.
+       Scale may need tweaking once you see the model in headset.
+  ═══════════════════════════════════════════════════════════════════ -->
+  <a-entity
+    id="the-deer"
+    class="grabbable"
+    gltf-model="#deer-model"
+    position="0 0 -1.5"
+    scale="0.8 0.8 0.8"
+    rotation="0 180 0"
+    cast-shadow="true"
+    deer-idle>
+
+    <!-- Soft warm highlight so the player can see it's interactive -->
+    <a-light type="point" color="#ffe8c0" intensity="0.6" distance="1.8"></a-light>
+
+    <!-- Grab hint label (fades when grabbed) -->
+    <a-text
+      id="deer-hint"
+      value="Hold GRIP to carry"
+      align="center"
+      color="#ffffff"
+      width="2.2"
+      position="0 1.4 0"
+      rotation="0 0 0"
+      look-at="#player-camera">
     </a-text>
   </a-entity>
 
@@ -514,7 +543,8 @@ const HIDE_DURATION = 120; // seconds
 const GameState = {
   phase: 'hide',    // 'hide' | 'wait' | 'leopard' | 'result'
   timeLeft: HIDE_DURATION,
-  lastTick: null
+  lastTick: null,
+  deerPosition: { x: 0, y: 0, z: -1.5 }   // updated each time deer is released
 };
 
 function formatTime(s) {
@@ -574,6 +604,156 @@ AFRAME.registerComponent('game-manager', {
 
 // Attach game-manager to scene
 document.querySelector('a-scene').setAttribute('game-manager', '');
+
+/* ════════════════════════════════════════════════════════════════════════
+   DEER IDLE ANIMATION
+   Gentle breathing (scale pulse) + slow left-right head sway.
+   Uses THREE.js directly so it works without a separate animation lib.
+════════════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('deer-idle', {
+  init() {
+    this._t = 0;
+    this._baseScale = null;  // captured after model loads
+    this._grabbed   = false;
+
+    this.el.addEventListener('model-loaded', () => {
+      this._baseScale = this.el.object3D.scale.clone();
+    });
+  },
+  setGrabbed(v) { this._grabbed = v; },
+  tick(time, dt) {
+    if (this._grabbed || !this._baseScale) return;
+    this._t += dt * 0.001;           // convert ms → seconds
+    const t = this._t;
+
+    // Breathing: gentle ±1.5% scale pulse at ~0.3 Hz
+    const breathe = 1 + Math.sin(t * 1.9) * 0.015;
+    this.el.object3D.scale.set(
+      this._baseScale.x * breathe,
+      this._baseScale.y * breathe,
+      this._baseScale.z * breathe
+    );
+
+    // Subtle head-bob in Y (±1 cm at ~0.2 Hz)
+    this.el.object3D.position.y = Math.sin(t * 1.2) * 0.01;
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════════════
+   GRABBER COMPONENT
+   Attach to each controller. Listens for gripdown / gripup (Quest 2
+   grip button). When grip is pressed and the deer is within reach,
+   parents the deer to this controller so it follows the hand.
+   On release it unparents and snaps the deer to the floor.
+
+   Grab radius: 0.7 m  (close enough to feel physical, forgiving enough
+   to work with the model's bounding box).
+════════════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('grabber', {
+  schema: { hand: { type: 'string', default: 'right' } },
+
+  init() {
+    this._holding     = null;   // currently held entity
+    this._prevParent  = null;   // original parent to restore on release
+    this._grabOffset  = new THREE.Vector3();
+    this._grabQuat    = new THREE.Quaternion();
+    this._worldPos    = new THREE.Vector3();
+
+    // Quest 2 grip button events
+    this.el.addEventListener('gripdown',   this._onGripDown.bind(this));
+    this.el.addEventListener('gripup',     this._onGripUp.bind(this));
+
+    // Also support trigger for desktop testing
+    this.el.addEventListener('triggerdown', this._onGripDown.bind(this));
+    this.el.addEventListener('triggerup',   this._onGripUp.bind(this));
+  },
+
+  _onGripDown() {
+    if (GameState.phase !== 'hide') return;
+    if (this._holding) return;               // already holding something
+
+    const deer = document.getElementById('the-deer');
+    if (!deer) return;
+
+    // Distance check in world space
+    const ctrlPos = new THREE.Vector3();
+    const deerPos = new THREE.Vector3();
+    this.el.object3D.getWorldPosition(ctrlPos);
+    deer.object3D.getWorldPosition(deerPos);
+
+    if (ctrlPos.distanceTo(deerPos) > 0.9) return;  // too far
+
+    // ── Grab! ────────────────────────────────────────────────────────
+    this._holding = deer;
+
+    // Hide the hint label
+    const hint = document.getElementById('deer-hint');
+    if (hint) hint.setAttribute('visible', false);
+
+    // Tell the idle component to stop animating while held
+    if (deer.components['deer-idle']) deer.components['deer-idle'].setGrabbed(true);
+
+    // Compute offset so the deer doesn't snap to controller origin
+    const ctrlWorldInv = new THREE.Matrix4();
+    this.el.object3D.updateMatrixWorld();
+    ctrlWorldInv.copy(this.el.object3D.matrixWorld).invert();
+
+    deer.object3D.getWorldPosition(deerPos);
+    this._grabOffset.copy(deerPos).applyMatrix4(ctrlWorldInv);
+
+    // Reparent deer → controller
+    this._prevParent = deer.parentNode;
+    this.el.appendChild(deer);
+
+    // Apply local offset so it stays in place visually
+    deer.object3D.position.copy(this._grabOffset);
+
+    console.log(`[Grabber] ${this.data.hand} grabbed the deer`);
+  },
+
+  _onGripUp() {
+    if (!this._holding) return;
+    const deer = this._holding;
+    this._holding = null;
+
+    // Get deer world position before reparenting
+    const worldPos = new THREE.Vector3();
+    deer.object3D.getWorldPosition(worldPos);
+
+    const worldQuat = new THREE.Quaternion();
+    deer.object3D.getWorldQuaternion(worldQuat);
+
+    // Restore to scene root
+    const scene = document.querySelector('a-scene');
+    if (this._prevParent && this._prevParent !== scene) {
+      this._prevParent.appendChild(deer);
+    } else {
+      scene.appendChild(deer);
+    }
+
+    // Snap Y to ground (floor = y 0), keep XZ from world pos
+    worldPos.y = 0;
+    deer.setAttribute('position', {
+      x: worldPos.x,
+      y: worldPos.y,
+      z: worldPos.z
+    });
+
+    // Restore world rotation
+    deer.object3D.quaternion.copy(worldQuat);
+
+    // Resume idle animation
+    if (deer.components['deer-idle']) deer.components['deer-idle'].setGrabbed(false);
+
+    // Show hint again (so player knows they can grab again)
+    const hint = document.getElementById('deer-hint');
+    if (hint) hint.setAttribute('visible', true);
+
+    // Record final deer position for the leopard phase
+    GameState.deerPosition = { x: worldPos.x, y: 0, z: worldPos.z };
+    console.log(`[Grabber] ${this.data.hand} released deer at`, GameState.deerPosition);
+  }
+});
 
 </script>
 </body>
