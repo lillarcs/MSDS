@@ -27,7 +27,7 @@
   webxr="requiredFeatures: local-floor, bounded-floor; optionalFeatures: hand-tracking"
   renderer="antialias: true; colorManagement: true; physicallyCorrectLights: true"
   shadow="type: pcfsoft"
-  fog="type: exponential; color: #2a4020; density: 0.035"
+  fog="type: exponential; color: #4a6a38; density: 0.022"
   id="main-scene">
 
   <!-- ═══ ASSETS ═══ -->
@@ -44,30 +44,33 @@
       look-controls="pointerLockEnabled: false">
     </a-camera>
     <a-entity id="left-controller"
-      oculus-touch-controls="hand: left; model: true"
+      oculus-touch-controls="hand: left; model: false"
       grabber="hand: left">
+      <!-- Simple hand indicator — no external model needed -->
+      <a-sphere radius="0.04" color="#ffccaa" material="emissive:#885533; emissiveIntensity:0.4"></a-sphere>
     </a-entity>
     <a-entity id="right-controller"
-      oculus-touch-controls="hand: right; model: true"
+      oculus-touch-controls="hand: right; model: false"
       grabber="hand: right">
+      <a-sphere radius="0.04" color="#ffccaa" material="emissive:#885533; emissiveIntensity:0.4"></a-sphere>
     </a-entity>
   </a-entity>
 
   <!-- ═══ LIGHTING — dim canopy-filtered jungle ═══ -->
-  <a-light id="ambient-light" type="ambient" color="#6a8a50" intensity="0.75"></a-light>
-  <!-- Dappled sun shaft through canopy -->
-  <a-light type="directional" color="#d8e8a0" intensity="1.0"
+  <a-light id="ambient-light" type="ambient" color="#88aa66" intensity="1.1"></a-light>
+  <!-- Main sun shaft through canopy -->
+  <a-light type="directional" color="#ffe8b0" intensity="1.6"
     position="5 14 -8"
     cast-shadow="true"
     shadow-camera-left="-20" shadow-camera-right="20"
     shadow-camera-top="20"   shadow-camera-bottom="-20"
     shadow-map-width="1024"  shadow-map-height="1024">
   </a-light>
-  <!-- Cool sky fill -->
-  <a-light type="directional" color="#6080a0" intensity="0.35" position="-7 7 4"></a-light>
+  <!-- Sky fill -->
+  <a-light type="directional" color="#80a0c0" intensity="0.5" position="-7 7 4"></a-light>
 
   <!-- ═══ SKY — impenetrable dark canopy ═══ -->
-  <a-sky color="#3a5a28" radius="150"></a-sky>
+  <a-sky color="#5a8040" radius="150"></a-sky>
 
   <!-- ═══ GROUND — dark soil ═══ -->
   <a-plane id="ground" rotation="-90 0 0" width="80" height="80"
@@ -84,7 +87,7 @@
   <!-- ═══════════════════════════════════════════════════════════
        EDUCATIONAL INTRO PANEL
   ═══════════════════════════════════════════════════════════════ -->
-  <a-entity id="intro-panel" position="0 1.7 -1.85" intro-panel>
+  <a-entity id="intro-panel" position="0 1.6 -0.9" scale="0.2 0.2 0.2" intro-panel>
     <a-plane width="1.96" height="1.1"  color="#443318" material="opacity:0.45; transparent:true" position="0 0 -0.006"></a-plane>
     <a-plane width="1.88" height="1.04" color="#0a0c08" material="opacity:0.93; transparent:true"></a-plane>
     <a-text
@@ -347,9 +350,9 @@
   <a-entity
     id="the-deer"
     class="grabbable"
-    position="0 0 -2"
+    position="0 0 -1.2"
     scale="1 1 1"
-    rotation="0 180 0"
+    rotation="0 90 0"
     cast-shadow="true"
     deer-body
     deer-idle>
@@ -393,7 +396,7 @@ const HIDE_DURATION = 120;
 const GameState = {
   phase: 'hide',            // 'hide' | 'leopard' | 'result'
   timeLeft: HIDE_DURATION,
-  deerPosition:     { x: 0, y: 0, z: -2 },
+  deerPosition:     { x: 0, y: 0, z: -1.2 },
   deerHidingScore:  null,   // 1-5 or null
   deerHidingSpotId: null    // 1-5 or null
 };
@@ -955,10 +958,22 @@ AFRAME.registerComponent('hiding-spot', {
     const g = this._getGlow();
     if (g) g.setAttribute('material', 'opacity:0; transparent:true; side:double; shader:flat');
   },
-  tick() {
-    if (GameState.phase !== 'hide') return;
+  tick(time) {
     const g = this._getGlow();
     if (!g) return;
+
+    // Always pulse gently so player can find spots (even before approaching)
+    const basePulse = 0.12 + Math.sin(time * 0.002) * 0.06;
+
+    if (GameState.phase !== 'hide') {
+      // Keep a static glow after hide phase ends
+      if (this._prevOp !== 0.12) {
+        this._prevOp = 0.12;
+        g.setAttribute('material', 'opacity:0.12; transparent:true; side:double; shader:flat');
+      }
+      return;
+    }
+
     this.el.object3D.getWorldPosition(this._sPos);
     let minDist = Infinity;
     ['left-controller', 'right-controller', 'player-camera'].forEach(id => {
@@ -968,11 +983,14 @@ AFRAME.registerComponent('hiding-spot', {
       const d = this._ePos.distanceTo(this._sPos);
       if (d < minDist) minDist = d;
     });
-    const DIST = 3.5;
-    const op = minDist < DIST
-      ? parseFloat((Math.max(0, 1 - minDist / DIST) * 0.30).toFixed(3))
+
+    const DIST = 5;
+    const proximityBoost = minDist < DIST
+      ? (1 - minDist / DIST) * 0.55
       : 0;
-    if (Math.abs(op - this._prevOp) > 0.006) {
+    const op = parseFloat(Math.max(basePulse, proximityBoost).toFixed(3));
+
+    if (Math.abs(op - this._prevOp) > 0.005) {
       this._prevOp = op;
       g.setAttribute('material', `opacity:${op}; transparent:true; side:double; shader:flat`);
     }
@@ -1119,7 +1137,9 @@ AFRAME.registerComponent('grabber', {
     const cp = new THREE.Vector3(), dp = new THREE.Vector3();
     this.el.object3D.getWorldPosition(cp);
     deer.object3D.getWorldPosition(dp);
-    if (cp.distanceTo(dp) > 0.95) return;
+    // Check against deer's visual centre (~0.5 m above root) with generous radius
+    dp.y += 0.5;
+    if (cp.distanceTo(dp) > 1.5) return;
 
     this._holding = deer;
     const hint = document.getElementById('deer-hint');
@@ -1298,10 +1318,10 @@ AFRAME.registerComponent('game-manager', {
       setPhaseLabel('Something is approaching...');
       // Darken ambient light slightly
       const al = document.getElementById('ambient-light');
-      if (al) al.setAttribute('light', 'intensity:0.52; color:#4a6838');
+      if (al) al.setAttribute('light', 'intensity:0.85; color:#6a8850');
       // Slightly denser fog — still visible but more ominous
       document.querySelector('a-scene').setAttribute('fog',
-        'type:exponential; color:#1e3018; density:0.048');
+        'type:exponential; color:#3a5a28; density:0.030');
       startTensionRumble();
     }
 
