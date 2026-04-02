@@ -31,11 +31,8 @@
   id="main-scene">
 
   <!-- ═══ ASSETS ═══ -->
-  <!-- Deer is built procedurally (no external textures) -->
-  <!-- Leopard is a self-contained GLB with no external texture files -->
-  <a-assets timeout="30000">
-    <a-asset-item id="leopard-model" src="Models/leopard_main.glb"></a-asset-item>
-  </a-assets>
+  <!-- All geometry is procedural — no external model files needed -->
+  <a-assets timeout="5000"></a-assets>
 
   <!-- ═══ PLAYER RIG ═══ -->
   <a-entity id="player-rig" position="0 0 0">
@@ -109,10 +106,20 @@
 
   <!-- ═══ RESULT PANEL (hidden until game end) ═══ -->
   <a-entity id="result-panel" position="0 1.7 -2" visible="false">
-    <a-plane id="result-bg" width="2.5" height="0.95" color="#070d05" material="opacity:0.93; transparent:true"></a-plane>
-    <a-text id="result-text" value="" align="center" color="#ffffff" width="4.2"
-      position="0 0 0.01" wrap-count="33" baseline="center">
+    <a-plane id="result-bg" width="2.6" height="1.2" color="#070d05" material="opacity:0.95; transparent:true"></a-plane>
+    <a-text id="result-text" value="" align="center" color="#ffffff" width="4.4"
+      position="0 0.18 0.01" wrap-count="34" baseline="center">
     </a-text>
+    <!-- Play Again button -->
+    <a-entity id="play-again-btn" position="0 -0.38 0.01">
+      <a-plane class="clickable" width="1.1" height="0.26" color="#1a3a1a"
+        material="opacity:0.95; transparent:true"
+        play-again-handler>
+      </a-plane>
+      <a-text value="Play Again" align="center" color="#66ff88"
+        width="2.8" position="0 0 0.012">
+      </a-text>
+    </a-entity>
   </a-entity>
 
   <!-- ═══════════════════════════════════════════════════════════
@@ -483,11 +490,10 @@
   ═══════════════════════════════════════════════════════════════ -->
   <a-entity
     id="the-leopard"
-    gltf-model="#leopard-model"
     position="0 0 -22"
-    scale="1 1 1"
-    rotation="0 0 0"
+    rotation="0 90 0"
     visible="false"
+    leopard-body
     leopard-patrol>
   </a-entity>
 
@@ -625,18 +631,17 @@ function setPhaseLabel(text) {
 }
 
 function showResult(outcome, score) {
-  const spotName  = GameState.deerHidingSpotId
-    ? (document.getElementById('spot' + GameState.deerHidingSpotId)
-        ?.components?.['hiding-spot']?.data?.label || 'Unknown spot')
-    : 'No hiding spot';
-  const scoreStr  = score > 0 ? `Score: ${score}/5 — ${spotName}` : 'Not hidden in any spot';
   let text, color, bg;
-  if (outcome === 'survived-well') {
-    text  = `Safe!\nThe leopard didn't find the deer.\n${scoreStr}`;
+  if (outcome === 'safe') {
+    text  = 'The deer survived!\nGood hiding spot.';
     color = '#44ff88'; bg = '#061a0a';
-    setPhaseLabel('Safe! The deer survived!');
+    setPhaseLabel('Safe!');
+  } else if (outcome === 'close') {
+    text  = 'Lucky escape!\nA better spot would be safer.';
+    color = '#ffaa33'; bg = '#1a1000';
+    setPhaseLabel('Close call!');
   } else {
-    text  = `The deer was found!\nThe leopard detected it.\n${scoreStr}`;
+    text  = 'The leopard found the deer.\nTry a denser hiding spot.';
     color = '#ff5544'; bg = '#180808';
     setPhaseLabel('The deer was found!');
   }
@@ -1384,47 +1389,182 @@ AFRAME.registerComponent('grabber', {
 });
 
 /* ════════════════════════════════════════════════════════════════
+   LEOPARD BODY — procedural golden leopard, low and muscular.
+   Color: #C8922A (golden yellow), spots: #A0701E (darker patches).
+   Side profile matching the deer's orientation convention.
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('leopard-body', {
+  init() {
+    const el  = this.el;
+    const G   = '#C8922A';   // golden yellow — base coat
+    const D   = '#A0701E';   // darker — spots / markings
+    const DK  = '#2a1a08';   // very dark — nose, pupils
+    const CRM = '#e8c888';   // cream — muzzle/chin underside
+
+    function mk(tag, attrs) {
+      const e = document.createElement(tag);
+      Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
+      el.appendChild(e);
+      return e;
+    }
+    function sp(pos, radius, color, sx=1, sy=1, sz=1, sw=9, sh=7) {
+      mk('a-sphere', { radius, position: pos, color,
+        material: 'roughness:1; metalness:0',
+        scale: `${sx} ${sy} ${sz}`,
+        'segments-width': sw, 'segments-height': sh });
+    }
+    function cy(pos, radius, height, color, rx=0, ry=0, rz=0) {
+      mk('a-cylinder', { radius, height, position: pos, color,
+        material: 'roughness:1; metalness:0',
+        rotation: `${rx} ${ry} ${rz}` });
+    }
+
+    // ── Main torso — long, low, muscular ──
+    sp('0 0.38 0',     0.28, G,  1.1,  0.82, 2.2);    // long body
+    sp('0 0.40 0.55',  0.22, G,  1.0,  0.88, 1.1);    // deep chest
+    sp('0 0.38 -0.55', 0.24, G,  1.05, 0.85, 1.0);    // powerful haunches
+
+    // ── Belly — slightly paler ──
+    sp('0 0.25 0',     0.14, CRM, 0.9, 0.45, 1.8, 7, 5);
+
+    // ── Neck — thick and low ──
+    cy('0 0.55 0.70',  0.11, 0.28, G, -30, 0, 0);
+
+    // ── Head — wide, rounded ──
+    sp('0 0.70 0.90',  0.18, G,  1.15, 1.0, 1.1, 9, 7);
+
+    // ── Muzzle — wide and rounded ──
+    sp('0 0.65 1.03',  0.11, CRM, 1.0, 0.72, 1.1, 8, 6);
+
+    // ── Nose ──
+    sp('0 0.64 1.11',  0.028, DK, 1.2, 0.8, 1, 6, 4);
+
+    // ── Chin ──
+    sp('0 0.59 1.05',  0.055, CRM, 1, 0.7, 0.9, 7, 5);
+
+    // ── Eyes ──
+    sp('-0.10 0.73 1.01', 0.028, DK, 1, 1, 1, 5, 4);
+    sp(' 0.10 0.73 1.01', 0.028, DK, 1, 1, 1, 5, 4);
+    // Eye shine
+    sp('-0.10 0.74 1.035', 0.010, '#ffee88', 1, 1, 1, 4, 3);
+    sp(' 0.10 0.74 1.035', 0.010, '#ffee88', 1, 1, 1, 4, 3);
+
+    // ── Ears — small, rounded ──
+    sp('-0.13 0.88 0.90', 0.055, G,  0.7, 0.9, 0.5, 6, 5);
+    sp(' 0.13 0.88 0.90', 0.055, G,  0.7, 0.9, 0.5, 6, 5);
+    sp('-0.13 0.89 0.905',0.038, DK, 0.5, 0.75, 0.35, 5, 4);
+    sp(' 0.13 0.89 0.905',0.038, DK, 0.5, 0.75, 0.35, 5, 4);
+
+    // ── 4 stocky legs ──
+    cy('-0.18 0.20  0.50', 0.055, 0.40, G);   // front left
+    cy(' 0.18 0.20  0.50', 0.055, 0.40, G);   // front right
+    cy('-0.18 0.20 -0.50', 0.060, 0.40, G);   // back left
+    cy(' 0.18 0.20 -0.50', 0.060, 0.40, G);   // back right
+    // Paws — wide, flattened
+    sp('-0.18 0.02  0.50', 0.058, DK, 1.3, 0.45, 1.1, 6, 4);
+    sp(' 0.18 0.02  0.50', 0.058, DK, 1.3, 0.45, 1.1, 6, 4);
+    sp('-0.18 0.02 -0.50', 0.060, DK, 1.3, 0.45, 1.1, 6, 4);
+    sp(' 0.18 0.02 -0.50', 0.060, DK, 1.3, 0.45, 1.1, 6, 4);
+
+    // ── Tail — long, curving upward from haunches ──
+    sp('0 0.44 -0.75', 0.055, G,  0.55, 0.55, 1.3, 7, 5);   // base
+    sp('0 0.54 -0.95', 0.050, G,  0.5,  0.5,  1.1, 7, 5);   // mid-low
+    sp('0 0.68 -1.10', 0.046, G,  0.5,  0.5,  1.0, 6, 5);   // mid
+    sp('0 0.84 -1.18', 0.042, G,  0.5,  0.5,  0.9, 6, 4);   // mid-high
+    sp('0 0.98 -1.16', 0.038, G,  0.5,  0.5,  0.85, 6, 4);  // high
+    sp('0 1.08 -1.08', 0.034, G,  0.5,  0.5,  0.8,  6, 4);  // tip-curve
+    sp('0 1.13 -0.98', 0.028, D,  0.6,  0.6,  0.9,  5, 4);  // dark tip
+
+    // ── Spot patches — darker rosette suggestions ──
+    sp('0     0.55  0.15', 0.12, D,  1.4, 0.3, 1.6, 6, 4);  // dorsal stripe
+    sp(' 0.22 0.48  0.10', 0.08, D, 1.0, 0.3, 1.2, 5, 4);   // flank spot L
+    sp('-0.22 0.48  0.10', 0.08, D, 1.0, 0.3, 1.2, 5, 4);   // flank spot R
+    sp(' 0.20 0.48 -0.30', 0.07, D, 1.0, 0.3, 1.1, 5, 4);   // rear flank L
+    sp('-0.20 0.48 -0.30', 0.07, D, 1.0, 0.3, 1.1, 5, 4);   // rear flank R
+    sp('0     0.55  0.55', 0.09, D, 1.2, 0.3, 1.3, 5, 4);   // shoulder spot
+    sp('0     0.52 -0.55', 0.09, D, 1.2, 0.3, 1.2, 5, 4);   // hip spot
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
+   PLAY AGAIN HANDLER
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('play-again-handler', {
+  init() {
+    this.el.addEventListener('click', () => window.location.reload());
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
    LEOPARD PATROL
-   Enters from the tree line (Z = -22), patrols worst → best spots.
-   Patrol order: 5 (open) → 4 (corridor) → 3 (rocks) → 2 (river) → 1 (deep)
-   If deer is at score ≤ 2 spot when leopard arrives → caught.
-   Score 3 → hesitates, slows.  Score 4-5 → passes by.
+   Spawns next to deer (or player), steps out from cover over 2 s,
+   then paces while the result is shown.
 ════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('leopard-patrol', {
   init() {
-    this._pacing = false;
-    this._paceT  = 0;
-    this._origin = new THREE.Vector3();
+    this._entering   = false;
+    this._pacing     = false;
+    this._paceT      = 0;
+    this._enterT     = 0;
+    this._startPos   = new THREE.Vector3();
+    this._targetPos  = new THREE.Vector3();
+    this._origin     = new THREE.Vector3();
   },
-  // spawnPos: {x, z} — next to deer or player
-  // score: 0-5
+  // spawnPos: {x, z}  score: 0-5
   start(spawnPos, score) {
-    this.el.setAttribute('position', `${spawnPos.x + 1.2} 0 ${spawnPos.z}`);
+    // Target position — offset 1.5 m to the side of the deer/player
+    const tx = spawnPos.x + 1.5;
+    const tz = spawnPos.z;
+    // Start position — 3 m further back (as if emerging from trees)
+    const sx = tx + 3.0;
+    const sz = tz + 1.5;
+
+    this._startPos.set(sx, 0, sz);
+    this._targetPos.set(tx, 0, tz);
+    this._origin.set(tx, 0, tz);
+
+    this.el.object3D.position.copy(this._startPos);
     this.el.setAttribute('visible', true);
-    this._origin.set(spawnPos.x + 1.2, 0, spawnPos.z);
-    this._pacing = true;
-    this._paceT  = 0;
+    this._entering = true;
+    this._enterT   = 0;
+    this._score    = score;
+
     startLeopardGrowl();
 
-    // Decide outcome from score
-    const safe = score >= 3;
+    // Show result after entrance (2 s) + brief pause (1.5 s)
     setTimeout(() => {
       GameState.phase = 'result';
-      showResult(safe ? 'survived-well' : 'caught', score);
-    }, 2500);
+      const outcome = score >= 4 ? 'safe' : score === 3 ? 'close' : 'caught';
+      showResult(outcome, score);
+    }, 3800);
   },
   tick(time, dt) {
-    if (!this._pacing) return;
-    // Leopard paces back and forth around spawn point
-    this._paceT += dt * 0.001;
-    const ox = Math.sin(this._paceT * 1.6) * 0.8;
-    const oz = Math.cos(this._paceT * 0.9) * 0.5;
-    this.el.object3D.position.set(
-      this._origin.x + ox,
-      0,
-      this._origin.z + oz
-    );
-    this.el.object3D.rotation.y = Math.atan2(ox, oz);
+    const dtS = dt / 1000;
+
+    if (this._entering) {
+      this._enterT += dtS;
+      const t = Math.min(this._enterT / 2.0, 1.0);   // 2-second entrance
+      const ease = t * t * (3 - 2 * t);               // smoothstep
+      this.el.object3D.position.lerpVectors(this._startPos, this._targetPos, ease);
+      if (t >= 1.0) {
+        this._entering = false;
+        this._pacing   = true;
+        this._paceT    = 0;
+      }
+      return;
+    }
+
+    if (this._pacing) {
+      this._paceT += dtS;
+      const ox = Math.sin(this._paceT * 1.4) * 0.6;
+      const oz = Math.cos(this._paceT * 0.8) * 0.4;
+      this.el.object3D.position.set(
+        this._origin.x + ox,
+        0,
+        this._origin.z + oz
+      );
+      this.el.object3D.rotation.y = Math.atan2(ox, oz) + Math.PI * 0.5;
+    }
   }
 });
 
