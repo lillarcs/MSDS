@@ -27,7 +27,7 @@
   webxr="requiredFeatures: local-floor, bounded-floor; optionalFeatures: hand-tracking"
   renderer="antialias: true; colorManagement: true; physicallyCorrectLights: true"
   shadow="type: pcfsoft"
-  fog="type: exponential; color: #0c1009; density: 0.065"
+  fog="type: exponential; color: #2a4020; density: 0.035"
   id="main-scene">
 
   <!-- ═══ ASSETS ═══ -->
@@ -54,24 +54,24 @@
   </a-entity>
 
   <!-- ═══ LIGHTING — dim canopy-filtered jungle ═══ -->
-  <a-light id="ambient-light" type="ambient" color="#141d0f" intensity="0.38"></a-light>
-  <!-- Weak dappled sun shaft -->
-  <a-light type="directional" color="#3a5028" intensity="0.42"
+  <a-light id="ambient-light" type="ambient" color="#6a8a50" intensity="0.75"></a-light>
+  <!-- Dappled sun shaft through canopy -->
+  <a-light type="directional" color="#d8e8a0" intensity="1.0"
     position="5 14 -8"
     cast-shadow="true"
     shadow-camera-left="-20" shadow-camera-right="20"
     shadow-camera-top="20"   shadow-camera-bottom="-20"
     shadow-map-width="1024"  shadow-map-height="1024">
   </a-light>
-  <!-- Cool shadow fill -->
-  <a-light type="directional" color="#141e2a" intensity="0.14" position="-7 7 4"></a-light>
+  <!-- Cool sky fill -->
+  <a-light type="directional" color="#6080a0" intensity="0.35" position="-7 7 4"></a-light>
 
   <!-- ═══ SKY — impenetrable dark canopy ═══ -->
-  <a-sky color="#0c100a" radius="150"></a-sky>
+  <a-sky color="#3a5a28" radius="150"></a-sky>
 
   <!-- ═══ GROUND — dark soil ═══ -->
   <a-plane id="ground" rotation="-90 0 0" width="80" height="80"
-    color="#110d06" material="roughness:1; metalness:0" receive-shadow="true">
+    color="#2a1e0c" material="roughness:1; metalness:0" receive-shadow="true">
   </a-plane>
   <!-- Leaf litter patches -->
   <a-plane position="-2  0.004 -7"  rotation="-90 25 0"  width="4"   height="3"   color="#1a1206" material="opacity:0.65; transparent:true"></a-plane>
@@ -1298,10 +1298,10 @@ AFRAME.registerComponent('game-manager', {
       setPhaseLabel('Something is approaching...');
       // Darken ambient light slightly
       const al = document.getElementById('ambient-light');
-      if (al) al.setAttribute('light', 'intensity:0.20; color:#0f1608');
-      // Denser fog
+      if (al) al.setAttribute('light', 'intensity:0.52; color:#4a6838');
+      // Slightly denser fog — still visible but more ominous
       document.querySelector('a-scene').setAttribute('fog',
-        'type:exponential; color:#080c06; density:0.090');
+        'type:exponential; color:#1e3018; density:0.048');
       startTensionRumble();
     }
 
