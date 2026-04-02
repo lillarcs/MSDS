@@ -213,10 +213,10 @@
   <a-plane position=" 3.2 0.03 -14"   rotation="-90  -4 0" width="3"   height="5" color="#070e12" material="roughness:0.05; metalness:0.55; opacity:0.93; transparent:true"></a-plane>
   <a-plane position=" 4.2 0.03 -11.5" rotation="-90 -11 0" width="3"   height="5" color="#050c10" material="roughness:0.05; metalness:0.55; opacity:0.93; transparent:true"></a-plane>
   <a-plane position=" 5.5 0.03 -9.5"  rotation="-90 -19 0" width="3"   height="5" color="#070e12" material="roughness:0.05; metalness:0.55; opacity:0.93; transparent:true"></a-plane>
-  <!-- Shimmer overlay -->
-  <a-plane position="3.2 0.038 -14" rotation="-90 -4 0" width="3.1" height="5.1"
+  <!-- Shimmer overlay — opacity animated via water-shimmer tick component, no TWEEN -->
+  <a-plane id="river-shimmer" position="3.2 0.038 -14" rotation="-90 -4 0" width="3.1" height="5.1"
     color="#0a1c28" material="roughness:0; metalness:0.9; opacity:0.22; transparent:true"
-    animation="property: material.opacity; from:0.10; to:0.38; dur:2200; dir:alternate; loop:true; easing:sinusoidalInOut">
+    water-shimmer>
   </a-plane>
 
   <!-- ════════════════════════════════════════════════════════════
@@ -870,6 +870,27 @@ AFRAME.registerComponent('willow-plant', {
 });
 
 /* ════════════════════════════════════════════════════════════════
+   WATER SHIMMER — oscillates river overlay opacity via sin, no TWEEN
+════════════════════════════════════════════════════════════════ */
+AFRAME.registerComponent('water-shimmer', {
+  init() {
+    this._t   = 0;
+    this._mat = null;
+  },
+  tick(time, dt) {
+    if (!this._mat) {
+      const mesh = this.el.getObject3D('mesh');
+      if (!mesh) return;
+      this._mat = mesh.material;
+    }
+    this._t += dt * 0.001;
+    // Smoothly oscillate opacity 0.10 → 0.38 using sin — no easing library
+    this._mat.opacity = 0.10 + (Math.sin(this._t * 1.4) * 0.5 + 0.5) * 0.28;
+    this._mat.needsUpdate = true;
+  }
+});
+
+/* ════════════════════════════════════════════════════════════════
    FIREFLY — floating glow point
 ════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('firefly', {
@@ -1161,9 +1182,11 @@ AFRAME.registerComponent('grabber', {
 ════════════════════════════════════════════════════════════════ */
 AFRAME.registerComponent('leopard-patrol', {
   init() {
-    this._active = false;
-    this._idx    = 0;
-    this._speed  = 1.2;   // m/s
+    this._active     = false;
+    this._idx        = 0;
+    this._speed      = 1.2;   // m/s
+    this._rushing    = false;
+    this._rushTarget = null;
     this._waypoints = [
       { x:  0,   z: -22,  spotId: null },  // spawn
       { x:  1,   z:  -6,  spotId: 5    },  // spot 5 — open floor
@@ -1183,6 +1206,13 @@ AFRAME.registerComponent('leopard-patrol', {
     startLeopardGrowl();
   },
   tick(time, dt) {
+    // Rush-lerp toward caught deer (replaces easing animation)
+    if (this._rushing && this._rushTarget) {
+      const pos = this.el.object3D.position;
+      pos.lerp(this._rushTarget, (dt / 1000) * 5);
+      if (pos.distanceTo(this._rushTarget) < 0.12) this._rushing = false;
+      return;
+    }
     if (!this._active) return;
     const tgt = this._waypoints[this._idx];
     if (!tgt) return;
@@ -1221,8 +1251,9 @@ AFRAME.registerComponent('leopard-patrol', {
       this._active = false;
       GameState.phase = 'result';
       const dp = GameState.deerPosition;
-      this.el.setAttribute('animation',
-        `property:position; to:${dp.x} 0 ${dp.z}; dur:1400; easing:easeInCubic`);
+      // Lerp rush toward deer position — no TWEEN/easing library needed
+      this._rushTarget = new THREE.Vector3(dp.x, 0, dp.z);
+      this._rushing    = true;
       setTimeout(() => showResult('caught'), 2000);
     } else if (score === 3) {
       // Hesitates — slow down near this spot
