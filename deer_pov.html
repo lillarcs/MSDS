@@ -287,10 +287,15 @@ AFRAME.registerComponent('deer-vision', {
     });
     this._ppScene.add(new THREE.Mesh(makeQuadGeo(), this._ppMat));
 
-    // ── Ensure renderer clears with alpha=0 for transparent AR background ─
-    // This is required so the RT captures transparent pixels where no 3D
-    // geometry exists, letting the tinted passthrough show through in Pass 3.
+    // ── Force transparent clear globally ────────────────────────────────
+    // alpha=0 clear = passthrough shows through every unoccluded pixel.
+    // autoClear=false means THREE never auto-wipes the XR framebuffer;
+    // we clear manually (and only) for the RT in Pass 1.
     renderer.setClearColor(new THREE.Color(0, 0, 0), 0);
+    renderer.autoClear      = false;   // ← critical: prevents opaque wipe of XR framebuffer
+    renderer.autoClearColor = false;
+    renderer.autoClearDepth = false;
+    renderer.autoClearStencil = false;
 
     // ── Intercept renderer.render ────────────────────────────────────────
     // In XR, Three.js calls renderer.render(scene, ArrayCamera) once per
@@ -309,33 +314,56 @@ AFRAME.registerComponent('deer-vision', {
         return;
       }
 
-      const prevRT      = renderer.getRenderTarget();
-      const prevClearC  = new THREE.Color();
-      const prevClearA  = renderer.getClearAlpha();
-      renderer.getClearColor(prevClearC);
+      // Disable ALL auto-clear for this entire pipeline.
+      // Three.js's default autoClear=true would wipe the XR framebuffer with
+      // the renderer's clear colour before each orig() call.  On Quest 2 the
+      // XR compositor has already placed the passthrough into the framebuffer
+      // at the start of the frame; an opaque auto-clear destroys it.
+      // We re-enable autoClear after the pipeline so A-Frame's own internals
+      // (e.g. shadow maps, environment maps) still work between frames.
+      renderer.autoClear        = false;
+      renderer.autoClearColor   = false;
+      renderer.autoClearDepth   = false;
+      renderer.autoClearStencil = false;
 
-      // ── Pass 1: render 3D scene → RT with transparent background ────────
+      const prevRT  = renderer.getRenderTarget();
+      const xrCam   = (renderer.xr && renderer.xr.isPresenting) ? camera : self._ppCam;
+
+      // ── Pass 1: 3D scene → RT (ONLY explicit clear here) ────────────────
+      // Clears the RT to (0,0,0,0) so empty pixels stay transparent,
+      // letting the tinted passthrough show through them in Pass 3.
       renderer.setRenderTarget(self._rt);
       renderer.setClearColor(new THREE.Color(0, 0, 0), 0);
       renderer.clear(true, true, true);
-      orig(scene, camera);
+      orig(scene, camera);         // autoClear=false → no second wipe of RT
 
-      // ── Pass 2: passthrough tint → XR framebuffer (or canvas) ───────────
+      // ── Pass 2: passthrough colour tint → XR framebuffer ────────────────
+      // Multiply (0,0.9,1) zeros red / preserves green+blue on passthrough.
+      // Additive (0,0,0.28) pushes blue past the ×1 multiply ceiling.
+      // NO clear — passthrough from the XR compositor stays intact.
       renderer.setRenderTarget(prevRT);
-      renderer.setClearColor(prevClearC, prevClearA);
-      const tintCam = (renderer.xr && renderer.xr.isPresenting) ? camera : self._ppCam;
-      orig(self._tintScene, tintCam);
+      renderer.setClearColor(new THREE.Color(0, 0, 0), 0); // keep alpha=0 globally
+      orig(self._tintScene, xrCam);
 
-      // ── Pass 3: post-process + letterbox → XR framebuffer ───────────────
+      // ── Pass 3: post-process quad → XR framebuffer ──────────────────────
+      // Letterbox zones output (0,0,0,1) — solid black, occludes passthrough.
+      // Visible band outputs colour-corrected 3D content at s.a.
+      // Transparent pixels (s.a ≈ 0, no 3D geometry) let the tinted
+      // passthrough from Pass 2 remain visible.
+      // NO clear — both passes render additively on top of the passthrough.
       self._ppMat.uniforms.tDiffuse.value = self._rt.texture;
-      // Update FOV uniform live (camera FOV can change in XR)
       const fovSrc = camera.isArrayCamera && camera.cameras.length
         ? camera.cameras[0] : camera;
       if (fovSrc.isPerspectiveCamera) {
         self._ppMat.uniforms.uHalfVFov.value = fovSrc.fov * 0.5;
       }
-      const ppCam = (renderer.xr && renderer.xr.isPresenting) ? camera : self._ppCam;
-      orig(self._ppScene, ppCam);
+      orig(self._ppScene, xrCam);
+
+      // Restore autoClear so A-Frame sub-systems work normally
+      renderer.autoClear        = true;
+      renderer.autoClearColor   = true;
+      renderer.autoClearDepth   = true;
+      renderer.autoClearStencil = true;
     };
   },
 
@@ -374,16 +402,18 @@ AFRAME.registerComponent('deer-vision', {
 <a-scene
   deer-vision="verticalFov: 96"
   renderer="alpha: true; antialias: true; colorManagement: true"
-  webxr="optionalFeatures: hit-test, local-floor; referenceSpaceType: local-floor"
+  webxr="requiredFeatures: local; optionalFeatures: hit-test, local-floor; referenceSpaceType: local-floor"
   vr-mode-ui="enabled: false"
-  background="color: #000000; transparent: true">
+  background="transparent: true">
 
   <!--
     <a-sky> with opacity:0 and shader:flat.
     Combined with renderer="alpha:true", this ensures the background is
     transparent so the AR passthrough shows through unoccluded regions.
   -->
-  <a-sky color="#000000" material="shader: flat; opacity: 0; transparent: true"></a-sky>
+  <a-sky color="#000000"
+         material="shader: flat; opacity: 0; transparent: true;
+                   depthWrite: false; alphaTest: 0"></a-sky>
 
   <!--
     Minimal scene content for AR overlay.
