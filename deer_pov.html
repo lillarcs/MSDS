@@ -6,116 +6,155 @@
 <title>Deer POV</title>
 <style>
   body { margin: 0; overflow: hidden; background: #1a2a10; }
-  canvas { display: block; }
-</style>
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+  #hud {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+    font-family: monospace; font-size: 14px; color: #aaccaa;
+    background: rgba(0,0,0,0.55); padding: 7px 18px; border-radius: 20px;
+    z-index: 10; pointer-events: none; letter-spacing: 0.04em;
   }
-}
+  #hud.dusk { color: #ccddff; }
+  #duskBtn {
+    position: fixed; bottom: 70px; left: 50%; transform: translateX(-50%);
+    font-family: monospace; font-size: 13px; background: rgba(0,0,0,0.6);
+    color: #aabbaa; border: 1px solid #445544; border-radius: 16px;
+    padding: 6px 20px; cursor: pointer; z-index: 10;
+  }
+  #duskBtn:hover { background: rgba(20,40,20,0.8); }
+</style>
+<!-- A-Frame 1.6 bundles Three.js r162 — same version used across this repo -->
+<script src="https://cdn.jsdelivr.net/npm/aframe@1.6.0/dist/aframe.min.js"></script>
+<!-- deer-vision.js is kept for standalone use; eye-rig supersedes it here -->
+<script src="eye-rig.js"></script>
+
+<script>
+/* ── Forest builder ─────────────────────────────────────────────────────────
+   Populates the #world entity with procedural trees and grass.            */
+AFRAME.registerComponent('deer-forest', {
+  init() {
+    const root = this.el.object3D;
+    const foliageMat = new THREE.MeshLambertMaterial({ color: 0x2d5a1a });
+    const trunkMat   = new THREE.MeshLambertMaterial({ color: 0x5a3a1a });
+
+    function makeTree(x, z) {
+      const trunk = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.12, 0.18, 2.0, 7), trunkMat);
+      trunk.position.set(x, 1.0, z);
+      trunk.castShadow = true;
+      root.add(trunk);
+
+      [{ h: 0, s: 1.0 }, { h: 0.7, s: 0.75 }, { h: 1.3, s: 0.5 }].forEach(({ h, s }) => {
+        const cone = new THREE.Mesh(
+          new THREE.ConeGeometry(1.1 * s, 1.8 * s, 7), foliageMat);
+        cone.position.set(x, 2.2 + h, z);
+        cone.castShadow = true;
+        root.add(cone);
+      });
+    }
+
+    for (let i = 0; i < 60; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = 5 + Math.random() * 35;
+      makeTree(Math.cos(a) * d, Math.sin(a) * d);
+    }
+
+    const grassMat = new THREE.MeshLambertMaterial({ color: 0x4a7a20, side: THREE.DoubleSide });
+    for (let i = 0; i < 200; i++) {
+      const b = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.4), grassMat);
+      b.position.set((Math.random() - 0.5) * 40, 0.2, (Math.random() - 0.5) * 40);
+      b.rotation.y = Math.random() * Math.PI;
+      root.add(b);
+    }
+  },
+});
+
+/* ── Deer-walk camera bob ─────────────────────────────────────────────────── */
+AFRAME.registerComponent('deer-walk', {
+  init() { this.t = 0; },
+  tick(_, dt) {
+    this.t += dt * 0.000012 * 1000;
+    const t = this.t;
+    this.el.object3D.position.set(
+      Math.sin(t * 0.3) * 0.5,
+      1.0 + Math.sin(t * 2) * 0.04,
+      Math.cos(t * 0.3) * 0.5
+    );
+    this.el.object3D.lookAt(
+      Math.sin(t * 0.3 + 0.1) * 2,
+      0.9 + Math.sin(t * 2 + 0.2) * 0.04,
+      Math.cos(t * 0.3 + 0.1) * 2
+    );
+  },
+});
 </script>
 </head>
 <body>
-<script type="module">
-import * as THREE from 'three';
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1a2a10);
-scene.fog = new THREE.Fog(0x1a2a10, 10, 80);
+<div id="hud">Deer POV &nbsp;|&nbsp; <span id="modeLabel">Day vision</span></div>
+<button id="duskBtn">Toggle Dusk Mode [D]</button>
 
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
-camera.position.set(0, 1.0, 0); // deer eye height ~1m
+<!--
+  eye-rig        — post-processing: cyclovergence + FOV compression + dusk mode.
+                   worldSelector must point to the scene-content wrapper below.
+  renderer       — alpha:true keeps AR passthrough visible through transparent pixels.
+  webxr          — optional AR/VR entry for Quest 2 mixed-reality use.
+-->
+<a-scene
+  eye-rig="verticalFov: 96;
+           torsionPerPitch: 0.15;
+           fovCompression: 0.60;
+           worldSelector: #world;
+           duskMode: false;
+           duskBrightness: 18"
+  renderer="alpha: true; antialias: true; colorManagement: true"
+  fog="type: exponential; color: #1a2a10; density: 0.025"
+  webxr="optionalFeatures: local-floor, bounded-floor, hand-tracking">
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.shadowMap.enabled = true;
-document.body.appendChild(renderer.domElement);
+  <!-- #world is the FOV-compression wrapper. eye-rig counter-rotates it
+       each tick by (1 − fovCompression) of the head's angular delta.     -->
+  <a-entity id="world" deer-forest>
+    <!-- Ground -->
+    <a-plane rotation="-90 0 0" width="200" height="200"
+             color="#3a5a1a" shadow="receive: true"></a-plane>
 
-// Lighting
-const ambient = new THREE.AmbientLight(0x405030, 1.2);
-scene.add(ambient);
+    <!-- Lighting lives inside #world so it rotates with the scene -->
+    <a-light type="ambient"     color="#405030" intensity="1.2"></a-light>
+    <a-light type="directional" color="#ffe8a0" intensity="2.0"
+             position="20 40 10" cast-shadow="true"></a-light>
+  </a-entity>
 
-const sun = new THREE.DirectionalLight(0xffe8a0, 2.0);
-sun.position.set(20, 40, 10);
-sun.castShadow = true;
-scene.add(sun);
+  <!-- Camera lives OUTSIDE #world so head-tracking drives it normally;
+       only the scene content compresses, not the user's position.        -->
+  <a-camera deer-walk position="0 1.0 0"
+            near="0.05" far="200"
+            look-controls="enabled: false"
+            wasd-controls="enabled: false">
+  </a-camera>
 
-// Ground
-const groundGeo = new THREE.PlaneGeometry(200, 200, 40, 40);
-const groundMat = new THREE.MeshLambertMaterial({ color: 0x3a5a1a });
-const ground = new THREE.Mesh(groundGeo, groundMat);
-ground.rotation.x = -Math.PI / 2;
-ground.receiveShadow = true;
-scene.add(ground);
+</a-scene>
 
-// Trees
-function makeTree(x, z) {
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.12, 0.18, 2.0, 7),
-    new THREE.MeshLambertMaterial({ color: 0x5a3a1a })
-  );
-  trunk.position.set(x, 1.0, z);
-  trunk.castShadow = true;
-  scene.add(trunk);
+<script>
+  const sceneEl  = document.querySelector('a-scene');
+  const hud      = document.getElementById('hud');
+  const modeLabel = document.getElementById('modeLabel');
 
-  const foliageMat = new THREE.MeshLambertMaterial({ color: 0x2d5a1a });
-  const heights = [0, 0.7, 1.3];
-  const scales = [1.0, 0.75, 0.5];
-  heights.forEach((h, i) => {
-    const cone = new THREE.Mesh(
-      new THREE.ConeGeometry(1.1 * scales[i], 1.8 * scales[i], 7),
-      foliageMat
-    );
-    cone.position.set(x, 2.2 + h, z);
-    cone.castShadow = true;
-    scene.add(cone);
+  function getEyeRig() {
+    return sceneEl.components && sceneEl.components['eye-rig'];
+  }
+
+  function toggleDusk() {
+    const er = getEyeRig();
+    if (!er) return;
+    er.toggleDuskMode();
+    const on = er.data.duskMode;
+    modeLabel.textContent = on ? 'Dusk mode (rod vision)' : 'Day vision';
+    hud.classList.toggle('dusk', on);
+  }
+
+  document.getElementById('duskBtn').addEventListener('click', toggleDusk);
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'd' || e.key === 'D') toggleDusk();
   });
-}
-
-for (let i = 0; i < 60; i++) {
-  const angle = Math.random() * Math.PI * 2;
-  const dist = 5 + Math.random() * 35;
-  makeTree(Math.cos(angle) * dist, Math.sin(angle) * dist);
-}
-
-// Grass tufts
-const grassMat = new THREE.MeshLambertMaterial({ color: 0x4a7a20, side: THREE.DoubleSide });
-for (let i = 0; i < 200; i++) {
-  const blade = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.3, 0.4),
-    grassMat
-  );
-  blade.position.set((Math.random() - 0.5) * 40, 0.2, (Math.random() - 0.5) * 40);
-  blade.rotation.y = Math.random() * Math.PI;
-  scene.add(blade);
-}
-
-// Simple deer-walk bob
-let t = 0;
-function animate() {
-  requestAnimationFrame(animate);
-  t += 0.012;
-  // Gentle head-bob as if slowly grazing/walking
-  camera.position.y = 1.0 + Math.sin(t * 2) * 0.04;
-  camera.position.x = Math.sin(t * 0.3) * 0.5;
-  camera.position.z = Math.cos(t * 0.3) * 0.5;
-  camera.lookAt(
-    Math.sin(t * 0.3 + 0.1) * 2,
-    0.9 + Math.sin(t * 2 + 0.2) * 0.04,
-    Math.cos(t * 0.3 + 0.1) * 2
-  );
-  renderer.render(scene, camera);
-}
-animate();
-
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
 </script>
 </body>
 </html>
