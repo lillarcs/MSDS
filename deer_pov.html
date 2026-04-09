@@ -2,159 +2,456 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deer POV</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Tufted Deer Vision — AR Passthrough</title>
+
 <style>
-  body { margin: 0; overflow: hidden; background: #1a2a10; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+
+  /* ── Start UI ────────────────────────────────────────────────────────────── */
+  #start-ui {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.88);
+    color: #c8d8b8; font-family: monospace;
+    gap: 20px; z-index: 200;
+  }
+  #start-ui h1 { margin: 0; font-size: 1.3rem; letter-spacing: 0.12em; color: #aaccaa; }
+  #start-ui p  { margin: 0; font-size: 0.8rem; opacity: 0.65; max-width: 340px; text-align: center; line-height: 1.5; }
+
+  #startARBtn {
+    margin-top: 8px; padding: 13px 36px;
+    font-size: 0.95rem; font-family: monospace; letter-spacing: 0.07em;
+    background: transparent; color: #aaccff;
+    border: 1px solid #5577aa; border-radius: 4px; cursor: pointer;
+    transition: background 0.2s;
+  }
+  #startARBtn:hover  { background: rgba(80,120,180,0.18); }
+  #startARBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  #support-note { font-size: 0.7rem; opacity: 0.45; max-width: 320px; text-align: center; }
+
+  /* ── In-session HUD ──────────────────────────────────────────────────────── */
   #hud {
-    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
-    font-family: monospace; font-size: 14px; color: #aaccaa;
-    background: rgba(0,0,0,0.55); padding: 7px 18px; border-radius: 20px;
-    z-index: 10; pointer-events: none; letter-spacing: 0.04em;
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+    font-family: monospace; font-size: 12px; color: #9ab89a;
+    background: rgba(0,0,0,0.5); padding: 5px 16px; border-radius: 14px;
+    z-index: 100; pointer-events: none; display: none;
   }
-  #hud.dusk { color: #ccddff; }
-  #duskBtn {
-    position: fixed; bottom: 70px; left: 50%; transform: translateX(-50%);
-    font-family: monospace; font-size: 13px; background: rgba(0,0,0,0.6);
-    color: #aabbaa; border: 1px solid #445544; border-radius: 16px;
-    padding: 6px 20px; cursor: pointer; z-index: 10;
-  }
-  #duskBtn:hover { background: rgba(20,40,20,0.8); }
 </style>
-<!-- A-Frame 1.6 bundles Three.js r162 — same version used across this repo -->
+
+<!-- A-Frame 1.6 — bundles Three.js r162, same jsDelivr version used across this repo -->
 <script src="https://cdn.jsdelivr.net/npm/aframe@1.6.0/dist/aframe.min.js"></script>
-<!-- deer-vision.js is kept for standalone use; eye-rig supersedes it here -->
-<script src="eye-rig.js"></script>
 
 <script>
-/* ── Forest builder ─────────────────────────────────────────────────────────
-   Populates the #world entity with procedural trees and grass.            */
-AFRAME.registerComponent('deer-forest', {
-  init() {
-    const root = this.el.object3D;
-    const foliageMat = new THREE.MeshLambertMaterial({ color: 0x2d5a1a });
-    const trunkMat   = new THREE.MeshLambertMaterial({ color: 0x5a3a1a });
+/* ============================================================================
+   DEER VISION COMPONENT
+   ============================================================================
+   Registers the `deer-vision` A-Frame component to be placed on <a-scene>.
+   Implements a THREE-PASS post-processing pipeline:
 
-    function makeTree(x, z) {
-      const trunk = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.12, 0.18, 2.0, 7), trunkMat);
-      trunk.position.set(x, 1.0, z);
-      trunk.castShadow = true;
-      root.add(trunk);
+   Pass 1  scene → WebGLRenderTarget (3D content captured with alpha=0 background)
+   Pass 2  Passthrough tint (two full-screen quads directly on XR framebuffer):
+             • Multiply (0, 0.9, 1.0)  — zeroes red channel, preserves green/blue
+             • Additive (0, 0,   0.28) — boosts blue beyond ×1.0 limit of multiply
+   Pass 3  Post-process shader (RT → framebuffer):
+             • Horizontal letterbox  — solid black outside ±30° vertical band
+             • Adaptive Gaussian blur — sharp ±10°, 20/60-equivalent at edges
+             • Dichromacy colour      — remove red, boost blue ×3, reds/oranges
+                                       → grey-brown, greens slightly desaturated
+             • Gradient letterbox edge — obscures passthrough near black bars,
+                                         simulating the pupillary blur fall-off
 
-      [{ h: 0, s: 1.0 }, { h: 0.7, s: 0.75 }, { h: 1.3, s: 0.5 }].forEach(({ h, s }) => {
-        const cone = new THREE.Mesh(
-          new THREE.ConeGeometry(1.1 * s, 1.8 * s, 7), foliageMat);
-        cone.position.set(x, 2.2 + h, z);
-        cone.castShadow = true;
-        root.add(cone);
-      });
-    }
+   Passthrough note
+   ────────────────
+   The Quest 2's AR passthrough feed is composited by the XR OS layer — it is
+   not available as a WebGL texture in standard WebXR. True per-pixel Gaussian
+   blur of the passthrough therefore requires the `raw-camera-access` extension
+   (not yet broadly available). Pass 2 achieves an *approximate* colour
+   correction using multiply/additive blending, which is visually convincing for
+   the dichromacy simulation. The letterbox and edge gradient (Pass 3) do block
+   the passthrough cleanly because they output alpha=1 in those zones.
+   ============================================================================ */
 
-    for (let i = 0; i < 60; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const d = 5 + Math.random() * 35;
-      makeTree(Math.cos(a) * d, Math.sin(a) * d);
-    }
+/* ── Vertex shader (shared by both Pass 2 tint quads and Pass 3 post-process) */
+const VERT = /* glsl */`
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  // Vertices span clip-space [-1,1]. Skip projection so this quad fills
+  // every viewport including per-eye XR viewports without any distortion.
+  gl_Position = vec4(position.xy, 0.0, 1.0);
+}`;
 
-    const grassMat = new THREE.MeshLambertMaterial({ color: 0x4a7a20, side: THREE.DoubleSide });
-    for (let i = 0; i < 200; i++) {
-      const b = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.4), grassMat);
-      b.position.set((Math.random() - 0.5) * 40, 0.2, (Math.random() - 0.5) * 40);
-      b.rotation.y = Math.random() * Math.PI;
-      root.add(b);
-    }
+/* ── Pass 3 post-process fragment shader ─────────────────────────────────── */
+const FRAG = /* glsl */`
+precision highp float;
+
+uniform sampler2D tDiffuse;   // captured 3D scene (RT from Pass 1)
+uniform vec2      uResolution;
+uniform float     uHalfVFov;  // half of headset vertical FOV in degrees
+
+varying vec2 vUv;
+
+// 5×5 Gaussian kernel (sigma≈1, 25 taps, unnormalised sum = 273)
+vec4 gaussBlur(sampler2D tex, vec2 uv, vec2 px) {
+  vec4 c = vec4(0.0);
+  c += texture2D(tex, uv+vec2(-2.,-2.)*px) *  1.0;
+  c += texture2D(tex, uv+vec2(-1.,-2.)*px) *  4.0;
+  c += texture2D(tex, uv+vec2( 0.,-2.)*px) *  7.0;
+  c += texture2D(tex, uv+vec2( 1.,-2.)*px) *  4.0;
+  c += texture2D(tex, uv+vec2( 2.,-2.)*px) *  1.0;
+  c += texture2D(tex, uv+vec2(-2.,-1.)*px) *  4.0;
+  c += texture2D(tex, uv+vec2(-1.,-1.)*px) * 16.0;
+  c += texture2D(tex, uv+vec2( 0.,-1.)*px) * 26.0;
+  c += texture2D(tex, uv+vec2( 1.,-1.)*px) * 16.0;
+  c += texture2D(tex, uv+vec2( 2.,-1.)*px) *  4.0;
+  c += texture2D(tex, uv+vec2(-2., 0.)*px) *  7.0;
+  c += texture2D(tex, uv+vec2(-1., 0.)*px) * 26.0;
+  c += texture2D(tex, uv+vec2( 0., 0.)*px) * 41.0;
+  c += texture2D(tex, uv+vec2( 1., 0.)*px) * 26.0;
+  c += texture2D(tex, uv+vec2( 2., 0.)*px) *  7.0;
+  c += texture2D(tex, uv+vec2(-2., 1.)*px) *  4.0;
+  c += texture2D(tex, uv+vec2(-1., 1.)*px) * 16.0;
+  c += texture2D(tex, uv+vec2( 0., 1.)*px) * 26.0;
+  c += texture2D(tex, uv+vec2( 1., 1.)*px) * 16.0;
+  c += texture2D(tex, uv+vec2( 2., 1.)*px) *  4.0;
+  c += texture2D(tex, uv+vec2(-2., 2.)*px) *  1.0;
+  c += texture2D(tex, uv+vec2(-1., 2.)*px) *  4.0;
+  c += texture2D(tex, uv+vec2( 0., 2.)*px) *  7.0;
+  c += texture2D(tex, uv+vec2( 1., 2.)*px) *  4.0;
+  c += texture2D(tex, uv+vec2( 2., 2.)*px) *  1.0;
+  return c / 273.0;
+}
+
+void main() {
+
+  // ── Vertical angle from horizon ──────────────────────────────────────────
+  // vUv.y = 0.5  →  screen centre = horizon when head is level.
+  // Maps the UV range to ±uHalfVFov degrees.
+  float angleDeg = (vUv.y - 0.5) * 2.0 * uHalfVFov;
+  float absAngle = abs(angleDeg);
+
+  // ── Letterbox — hard block outside ±30° (= 60° total band) ──────────────
+  // alpha=1 with black colour occludes the AR passthrough in those zones,
+  // producing a clean black bar that mimics a deer's horizontal-slit pupil.
+  if (absAngle > 30.0) {
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    return;
+  }
+
+  // ── Gradient letterbox edge (25°–30°) ────────────────────────────────────
+  // Smoothly darkens toward the black bar. Also drives alpha toward 1 so the
+  // passthrough is occluded at the edge, simulating peripheral blur fall-off.
+  float edgeFade = smoothstep(25.0, 30.0, absAngle); // 0 at centre, 1 at bar
+
+  // ── Adaptive Gaussian blur ───────────────────────────────────────────────
+  // Sharp within ±10° (the "visual streak" of the deer retina).
+  // Ramps to ~4 px radius (≈20/60 equivalent at Quest 2 PPD) by ±25°.
+  // Beyond 25° the gradient letterbox takes over and hides the transition.
+  float blurRadius = smoothstep(10.0, 25.0, absAngle) * 4.0;
+  vec2  px         = (1.0 / uResolution) * blurRadius;
+
+  vec4 s = (blurRadius < 0.01)
+    ? texture2D(tDiffuse, vUv)
+    : gaussBlur(tDiffuse, vUv, px);
+  vec3 col = s.rgb;
+
+  // ── Deer dichromacy colour correction ────────────────────────────────────
+  float lum  = dot(col, vec3(0.299, 0.587, 0.114));
+  float maxC = max(col.r, max(col.g, col.b));
+  float minC = min(col.r, min(col.g, col.b));
+  float chr  = maxC - minC + 0.0001;          // chroma (guards div-by-zero)
+  float sat  = clamp((maxC - minC) * 4.0, 0.0, 1.0);
+
+  // Red detection: r is the dominant channel
+  float redF     = clamp((col.r - max(col.g, col.b)) / chr, 0.0, 1.0);
+  // Orange detection: hue ≈15–45°, g is second-highest after r
+  float orgF     = clamp((col.g - col.b) / chr, 0.0, 1.0) * redF;
+  float redOrange = clamp(max(redF, orgF * 0.8) * sat, 0.0, 1.0);
+
+  // Green detection: g is the dominant channel
+  float greenF = clamp((col.g - max(col.r, col.b)) / chr, 0.0, 1.0) * sat;
+
+  // Desaturate reds/oranges → grey-brown (0.55/0.50/0.40 bias gives a
+  // warm-neutral tone that looks brown at any luminance level)
+  vec3 greyBrown = vec3(lum * 0.55, lum * 0.50, lum * 0.40);
+  vec3 out3 = mix(col, greyBrown, redOrange);
+
+  // Slightly desaturate greens (deer M-cone sensitivity without L-cone contrast)
+  out3 = mix(out3, mix(vec3(lum), out3, 0.70), greenF * 0.35);
+
+  // Dichromacy: zero red channel; boost blue ×3
+  // (blue was already partially boosted by the Pass 2 additive overlay on
+  // passthrough; here we correct blue in the 3D-rendered scene content)
+  out3.r = 0.0;
+  out3.b = min(1.0, out3.b * 3.0);
+
+  // ── Merge edge gradient ──────────────────────────────────────────────────
+  // Blend colour toward black and alpha toward 1 near the letterbox edge.
+  // This occludes the passthrough at the edges (simulating blur fall-off)
+  // and ensures a smooth transition rather than a hard cut.
+  out3  = mix(out3, vec3(0.0), edgeFade);
+  float outAlpha = mix(s.a, 1.0, edgeFade);
+
+  gl_FragColor = vec4(out3, outAlpha);
+}
+`;
+
+/* ── A-Frame component ──────────────────────────────────────────────────── */
+AFRAME.registerComponent('deer-vision', {
+  schema: {
+    // Full vertical FOV of the headset in degrees. Quest 2 ≈ 96°.
+    // Drives the letterbox ±30° and sharp-band ±10° calculations.
+    verticalFov: { type: 'number', default: 96 },
   },
-});
 
-/* ── Deer-walk camera bob ─────────────────────────────────────────────────── */
-AFRAME.registerComponent('deer-walk', {
-  init() { this.t = 0; },
-  tick(_, dt) {
-    this.t += dt * 0.000012 * 1000;
-    const t = this.t;
-    this.el.object3D.position.set(
-      Math.sin(t * 0.3) * 0.5,
-      1.0 + Math.sin(t * 2) * 0.04,
-      Math.cos(t * 0.3) * 0.5
-    );
-    this.el.object3D.lookAt(
-      Math.sin(t * 0.3 + 0.1) * 2,
-      0.9 + Math.sin(t * 2 + 0.2) * 0.04,
-      Math.cos(t * 0.3 + 0.1) * 2
-    );
+  init() {
+    this._rt        = null;  // render target for Pass 1 (3D scene capture)
+    this._ppScene   = null;  // Pass 3: post-process quad scene
+    this._tintScene = null;  // Pass 2: passthrough colour tint quad scene
+    this._ppCam     = null;  // shared ortho camera for clip-space quads
+    this._ppMat     = null;  // Pass 3 ShaderMaterial
+    this._origRender = null;
+
+    const sceneEl = this.el.sceneEl;
+    const go = () => this._setup(sceneEl.renderer);
+    sceneEl.renderer ? go() : sceneEl.addEventListener('renderstart', go);
+  },
+
+  _setup(renderer) {
+    const sz = new THREE.Vector2();
+    renderer.getSize(sz);
+    const W = sz.x, H = sz.y;
+
+    // ── Pass 1 render target ─────────────────────────────────────────────
+    this._rt = new THREE.WebGLRenderTarget(W, H, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format:    THREE.RGBAFormat,
+    });
+
+    // ── Shared clip-space camera (used by Pass 2 and Pass 3 in non-XR) ──
+    this._ppCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+    // ── Full-screen quad geometry (reused for all passes) ────────────────
+    function makeQuadGeo() {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(
+        new Float32Array([-1,-1,0, 1,-1,0, 1,1,0, -1,-1,0, 1,1,0, -1,1,0]), 3));
+      g.setAttribute('uv', new THREE.BufferAttribute(
+        new Float32Array([0,0, 1,0, 1,1, 0,0, 1,1, 0,1]), 2));
+      return g;
+    }
+
+    // ── Pass 2: passthrough tint scene ───────────────────────────────────
+    // Two full-screen quads rendered directly onto the XR framebuffer
+    // (no render target) to approximate colour correction on the passthrough:
+    //
+    //   Multiply  (0, 0.9, 1.0) — zeros red, slight desaturation of warm tones
+    //   Additive  (0, 0,   0.28) — pushes blue above the ×1.0 multiply ceiling
+    //
+    // Because they render before Pass 3, the solid-black letterbox output of
+    // Pass 3 covers the tinted passthrough in the top/bottom zones.
+    this._tintScene = new THREE.Scene();
+
+    const multiplyMat = new THREE.MeshBasicMaterial({
+      color:     new THREE.Color(0.0, 0.9, 1.0),
+      blending:  THREE.MultiplyBlending,
+      depthTest: false, depthWrite: false,
+    });
+    this._tintScene.add(new THREE.Mesh(makeQuadGeo(), multiplyMat));
+
+    const additiveMat = new THREE.MeshBasicMaterial({
+      color:       new THREE.Color(0.0, 0.0, 0.28),
+      blending:    THREE.AdditiveBlending,
+      transparent: true, opacity: 1.0,
+      depthTest: false, depthWrite: false,
+    });
+    this._tintScene.add(new THREE.Mesh(makeQuadGeo(), additiveMat));
+
+    // ── Pass 3: post-process scene ───────────────────────────────────────
+    this._ppScene = new THREE.Scene();
+
+    this._ppMat = new THREE.ShaderMaterial({
+      uniforms: {
+        tDiffuse:    { value: null },
+        uResolution: { value: new THREE.Vector2(W, H) },
+        uHalfVFov:   { value: this.data.verticalFov * 0.5 },
+      },
+      vertexShader:   VERT,
+      fragmentShader: FRAG,
+      transparent:    true,  // alpha=0 → passthrough shows; alpha=1 → we block it
+      depthTest:      false,
+      depthWrite:     false,
+    });
+    this._ppScene.add(new THREE.Mesh(makeQuadGeo(), this._ppMat));
+
+    // ── Ensure renderer clears with alpha=0 for transparent AR background ─
+    // This is required so the RT captures transparent pixels where no 3D
+    // geometry exists, letting the tinted passthrough show through in Pass 3.
+    renderer.setClearColor(new THREE.Color(0, 0, 0), 0);
+
+    // ── Intercept renderer.render ────────────────────────────────────────
+    // In XR, Three.js calls renderer.render(scene, ArrayCamera) once per
+    // frame. Our override applies the three-pass pipeline.
+    // In XR mode we pass the original ArrayCamera to orig() for Pass 2 and 3
+    // so Three.js can set per-eye viewports correctly. Our vertex shader ignores
+    // projection matrices, so the clip-space quads still fill each eye's viewport.
+    const self = this;
+    const orig = renderer.render.bind(renderer);
+    this._origRender = orig;
+
+    renderer.render = function(scene, camera) {
+      // Guard: never recurse on our own scenes
+      if (scene === self._ppScene || scene === self._tintScene) {
+        orig(scene, camera);
+        return;
+      }
+
+      const prevRT      = renderer.getRenderTarget();
+      const prevClearC  = new THREE.Color();
+      const prevClearA  = renderer.getClearAlpha();
+      renderer.getClearColor(prevClearC);
+
+      // ── Pass 1: render 3D scene → RT with transparent background ────────
+      renderer.setRenderTarget(self._rt);
+      renderer.setClearColor(new THREE.Color(0, 0, 0), 0);
+      renderer.clear(true, true, true);
+      orig(scene, camera);
+
+      // ── Pass 2: passthrough tint → XR framebuffer (or canvas) ───────────
+      renderer.setRenderTarget(prevRT);
+      renderer.setClearColor(prevClearC, prevClearA);
+      const tintCam = (renderer.xr && renderer.xr.isPresenting) ? camera : self._ppCam;
+      orig(self._tintScene, tintCam);
+
+      // ── Pass 3: post-process + letterbox → XR framebuffer ───────────────
+      self._ppMat.uniforms.tDiffuse.value = self._rt.texture;
+      // Update FOV uniform live (camera FOV can change in XR)
+      const fovSrc = camera.isArrayCamera && camera.cameras.length
+        ? camera.cameras[0] : camera;
+      if (fovSrc.isPerspectiveCamera) {
+        self._ppMat.uniforms.uHalfVFov.value = fovSrc.fov * 0.5;
+      }
+      const ppCam = (renderer.xr && renderer.xr.isPresenting) ? camera : self._ppCam;
+      orig(self._ppScene, ppCam);
+    };
+  },
+
+  remove() {
+    if (this._origRender && this.el.sceneEl.renderer) {
+      this.el.sceneEl.renderer.render = this._origRender;
+    }
+    this._rt    && this._rt.dispose();
+    this._ppMat && this._ppMat.dispose();
   },
 });
 </script>
 </head>
 <body>
 
-<div id="hud">Deer POV &nbsp;|&nbsp; <span id="modeLabel">Day vision</span></div>
-<button id="duskBtn">Toggle Dusk Mode [D]</button>
+<!-- ── Start UI ────────────────────────────────────────────────────────────── -->
+<div id="start-ui">
+  <h1>TUFTED DEER VISION</h1>
+  <p>
+    Experience the world through the eyes of <em>Elaphodus cephalophus</em>.
+    Dichromatic, horizontal-pupil, with rod-dominated peripheral blur.
+  </p>
+  <button id="startARBtn" disabled>Checking AR support…</button>
+  <p id="support-note"></p>
+</div>
+
+<!-- ── In-session HUD ──────────────────────────────────────────────────────── -->
+<div id="hud">Deer Vision Active</div>
 
 <!--
-  eye-rig        — post-processing: cyclovergence + FOV compression + dusk mode.
-                   worldSelector must point to the scene-content wrapper below.
-  renderer       — alpha:true keeps AR passthrough visible through transparent pixels.
-  webxr          — optional AR/VR entry for Quest 2 mixed-reality use.
+  deer-vision   — post-processing component defined above.
+  renderer      — alpha:true allows transparent pixels to reveal AR passthrough.
+  webxr         — exactly as requested; immersive-ar is entered via the Start button.
+  vr-mode-ui    — disabled; we provide our own button.
 -->
 <a-scene
-  eye-rig="verticalFov: 96;
-           torsionPerPitch: 0.15;
-           fovCompression: 0.60;
-           worldSelector: #world;
-           duskMode: false;
-           duskBrightness: 18"
+  deer-vision="verticalFov: 96"
   renderer="alpha: true; antialias: true; colorManagement: true"
-  fog="type: exponential; color: #1a2a10; density: 0.025"
-  webxr="optionalFeatures: local-floor, bounded-floor, hand-tracking">
+  webxr="optionalFeatures: hit-test, local-floor; referenceSpaceType: local-floor"
+  vr-mode-ui="enabled: false"
+  background="color: #000000; transparent: true">
 
-  <!-- #world is the FOV-compression wrapper. eye-rig counter-rotates it
-       each tick by (1 − fovCompression) of the head's angular delta.     -->
-  <a-entity id="world" deer-forest>
-    <!-- Ground -->
-    <a-plane rotation="-90 0 0" width="200" height="200"
-             color="#3a5a1a" shadow="receive: true"></a-plane>
+  <!--
+    <a-sky> with opacity:0 and shader:flat.
+    Combined with renderer="alpha:true", this ensures the background is
+    transparent so the AR passthrough shows through unoccluded regions.
+  -->
+  <a-sky color="#000000" material="shader: flat; opacity: 0; transparent: true"></a-sky>
 
-    <!-- Lighting lives inside #world so it rotates with the scene -->
-    <a-light type="ambient"     color="#405030" intensity="1.2"></a-light>
-    <a-light type="directional" color="#ffe8a0" intensity="2.0"
-             position="20 40 10" cast-shadow="true"></a-light>
-  </a-entity>
+  <!--
+    Minimal scene content for AR overlay.
+    In AR mode the real world IS the scene; 3D entities here appear
+    floating over the passthrough with deer-vision colour correction applied.
+  -->
+  <a-light type="ambient" color="#ffffff" intensity="0.6"></a-light>
 
-  <!-- Camera lives OUTSIDE #world so head-tracking drives it normally;
-       only the scene content compresses, not the user's position.        -->
-  <a-camera deer-walk position="0 1.0 0"
-            near="0.05" far="200"
-            look-controls="enabled: false"
+  <a-camera position="0 1.6 0"
+            look-controls="enabled: true; magicWindowTrackingEnabled: true"
             wasd-controls="enabled: false">
   </a-camera>
 
 </a-scene>
 
+<!-- ── Start AR / session management ──────────────────────────────────────── -->
 <script>
   const sceneEl  = document.querySelector('a-scene');
-  const hud      = document.getElementById('hud');
-  const modeLabel = document.getElementById('modeLabel');
+  const startUI  = document.getElementById('start-ui');
+  const startBtn = document.getElementById('startARBtn');
+  const noteEl   = document.getElementById('support-note');
+  const hudEl    = document.getElementById('hud');
 
-  function getEyeRig() {
-    return sceneEl.components && sceneEl.components['eye-rig'];
-  }
+  // ── Check WebXR immersive-ar support ─────────────────────────────────────
+  (async () => {
+    if (!navigator.xr) {
+      startBtn.textContent = 'WebXR not available';
+      noteEl.textContent   = 'Open in the Meta Quest Browser or another WebXR-capable browser.';
+      return;
+    }
 
-  function toggleDusk() {
-    const er = getEyeRig();
-    if (!er) return;
-    er.toggleDuskMode();
-    const on = er.data.duskMode;
-    modeLabel.textContent = on ? 'Dusk mode (rod vision)' : 'Day vision';
-    hud.classList.toggle('dusk', on);
-  }
+    const arSupported = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
 
-  document.getElementById('duskBtn').addEventListener('click', toggleDusk);
+    if (arSupported) {
+      startBtn.textContent = 'Start AR — Deer Vision';
+      startBtn.disabled    = false;
+      noteEl.textContent   = 'Requires Meta Quest 2/3 or another AR-capable device.';
+    } else {
+      // Desktop fallback: enter the scene without AR (vision shader still runs)
+      startBtn.textContent = 'Preview on Desktop';
+      startBtn.disabled    = false;
+      noteEl.textContent   = 'AR not supported here. Deer-vision shader runs in desktop preview mode.';
+    }
+  })();
 
-  document.addEventListener('keydown', e => {
-    if (e.key === 'd' || e.key === 'D') toggleDusk();
+  // ── Start button handler ──────────────────────────────────────────────────
+  startBtn.addEventListener('click', async () => {
+    startUI.style.display = 'none';
+    hudEl.style.display   = 'block';
+
+    if (!navigator.xr) return;
+
+    const arSupported = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
+    if (arSupported) {
+      // enterAR() requests an immersive-ar XR session.
+      // A-Frame handles the session lifecycle; our deer-vision render override
+      // is already active and will apply automatically once XR begins.
+      sceneEl.enterAR();
+    }
+    // Desktop: scene is already rendering with the deer-vision overlay active.
+  });
+
+  // ── Session exit — return to Start UI ────────────────────────────────────
+  sceneEl.addEventListener('exit-vr', () => {
+    startUI.style.display = 'flex';
+    hudEl.style.display   = 'none';
   });
 </script>
+
 </body>
 </html>
