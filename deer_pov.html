@@ -373,7 +373,7 @@ AFRAME.registerComponent('deer-vision', {
 <!-- ── Switch to VR button ─────────────────────────────────────────────────── -->
 <!-- Activates the passthrough cameras and enters immersive mode.              -->
 <!-- enterAR() is tried first (passthrough cameras on); enterVR() is fallback. -->
-<button id="vrBtn" disabled>Switch to VR</button>
+<button id="vrBtn">Switch to VR</button>
 
 <!-- ── In-session HUD ──────────────────────────────────────────────────────── -->
 <div id="hud">Deer Vision Active</div>
@@ -420,49 +420,46 @@ AFRAME.registerComponent('deer-vision', {
   const vrBtn   = document.getElementById('vrBtn');
   const hudEl   = document.getElementById('hud');
 
-  // ── Detect best available immersive mode ──────────────────────────────────
-  // AR (immersive-ar) is preferred because it activates the passthrough cameras.
-  // VR (immersive-vr) is the fallback for headsets without AR passthrough.
-  // On desktop neither is available; the button enters the flat preview.
-  let enterMode = 'flat'; // 'ar' | 'vr' | 'flat'
+  // Button is always enabled immediately — no async gate.
+  vrBtn.disabled = false;
 
-  (async () => {
+  // ── Click: activate passthrough cameras and enter immersive mode ──────────
+  vrBtn.addEventListener('click', async () => {
+    vrBtn.disabled = true;
+
     if (!navigator.xr) {
-      vrBtn.textContent = 'Switch to VR';
-      vrBtn.disabled    = false;
-      enterMode         = 'flat';
+      // No WebXR at all (desktop browser) — deer-vision shader is still
+      // visible in the flat canvas, nothing else to do.
+      vrBtn.classList.add('hidden');
+      hudEl.style.display = 'block';
       return;
     }
+
+    // immersive-ar requests the Quest 2 passthrough cameras directly.
+    // The XR compositor composites our WebGL output over the live camera feed;
+    // our deer-vision render pass (autoClear=false, alpha=0 background) lets
+    // the passthrough show through every transparent pixel.
     const arOk = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
-    const vrOk = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false);
 
     if (arOk) {
-      enterMode         = 'ar';
-    } else if (vrOk) {
-      enterMode         = 'vr';
-    }
-    vrBtn.disabled = false;
-  })();
-
-  // ── Switch to VR — click handler ──────────────────────────────────────────
-  vrBtn.addEventListener('click', () => {
-    vrBtn.classList.add('hidden');
-    hudEl.style.display = 'block';
-
-    if (enterMode === 'ar') {
-      // enterAR() requests immersive-ar → Quest 2 passthrough cameras turn on.
-      // Our deer-vision render override applies automatically once XR begins.
-      sceneEl.enterAR();
-    } else if (enterMode === 'vr') {
-      // enterVR() requests immersive-vr (standard headset stereo mode).
+      sceneEl.enterAR();   // ← activates passthrough cameras on Quest 2
+    } else {
+      // Headset without passthrough (e.g. Quest 1 in pure-VR mode):
+      // enter standard immersive-vr so the deer-vision shader still runs.
       sceneEl.enterVR();
     }
-    // flat: shader overlay already visible in the browser canvas — no action needed.
   });
 
-  // ── Exit session — restore button ─────────────────────────────────────────
+  // ── A-Frame fires 'enter-vr' for both AR and VR sessions ─────────────────
+  sceneEl.addEventListener('enter-vr', () => {
+    vrBtn.classList.add('hidden');
+    hudEl.style.display = 'block';
+  });
+
+  // ── Restore button when the session ends ──────────────────────────────────
   sceneEl.addEventListener('exit-vr', () => {
     vrBtn.classList.remove('hidden');
+    vrBtn.disabled      = false;
     hudEl.style.display = 'none';
   });
 </script>
