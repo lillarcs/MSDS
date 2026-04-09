@@ -8,28 +8,19 @@
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
 
-  /* ── Start UI ────────────────────────────────────────────────────────────── */
-  #start-ui {
-    position: fixed; inset: 0;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    background: rgba(0,0,0,0.88);
-    color: #c8d8b8; font-family: monospace;
-    gap: 20px; z-index: 200;
+  /* ── Switch to VR button ────────────────────────────────────────────────── */
+  #vrBtn {
+    position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+    padding: 16px 44px;
+    font-size: 1rem; font-family: monospace; letter-spacing: 0.09em;
+    background: rgba(0,0,0,0.72); color: #aaccff;
+    border: 1px solid #5577aa; border-radius: 6px;
+    cursor: pointer; z-index: 200;
+    transition: background 0.18s, border-color 0.18s;
   }
-  #start-ui h1 { margin: 0; font-size: 1.3rem; letter-spacing: 0.12em; color: #aaccaa; }
-  #start-ui p  { margin: 0; font-size: 0.8rem; opacity: 0.65; max-width: 340px; text-align: center; line-height: 1.5; }
-
-  #startARBtn {
-    margin-top: 8px; padding: 13px 36px;
-    font-size: 0.95rem; font-family: monospace; letter-spacing: 0.07em;
-    background: transparent; color: #aaccff;
-    border: 1px solid #5577aa; border-radius: 4px; cursor: pointer;
-    transition: background 0.2s;
-  }
-  #startARBtn:hover  { background: rgba(80,120,180,0.18); }
-  #startARBtn:disabled { opacity: 0.3; cursor: not-allowed; }
-
-  #support-note { font-size: 0.7rem; opacity: 0.45; max-width: 320px; text-align: center; }
+  #vrBtn:hover   { background: rgba(40,80,160,0.35); border-color: #88aadd; }
+  #vrBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+  #vrBtn.hidden  { display: none; }
 
   /* ── In-session HUD ──────────────────────────────────────────────────────── */
   #hud {
@@ -379,16 +370,10 @@ AFRAME.registerComponent('deer-vision', {
 </head>
 <body>
 
-<!-- ── Start UI ────────────────────────────────────────────────────────────── -->
-<div id="start-ui">
-  <h1>TUFTED DEER VISION</h1>
-  <p>
-    Experience the world through the eyes of <em>Elaphodus cephalophus</em>.
-    Dichromatic, horizontal-pupil, with rod-dominated peripheral blur.
-  </p>
-  <button id="startARBtn" disabled>Checking AR support…</button>
-  <p id="support-note"></p>
-</div>
+<!-- ── Switch to VR button ─────────────────────────────────────────────────── -->
+<!-- Activates the passthrough cameras and enters immersive mode.              -->
+<!-- enterAR() is tried first (passthrough cameras on); enterVR() is fallback. -->
+<button id="vrBtn" disabled>Switch to VR</button>
 
 <!-- ── In-session HUD ──────────────────────────────────────────────────────── -->
 <div id="hud">Deer Vision Active</div>
@@ -396,7 +381,7 @@ AFRAME.registerComponent('deer-vision', {
 <!--
   deer-vision   — post-processing component defined above.
   renderer      — alpha:true allows transparent pixels to reveal AR passthrough.
-  webxr         — exactly as requested; immersive-ar is entered via the Start button.
+  webxr         — immersive-ar (passthrough cameras) entered via the Switch to VR button.
   vr-mode-ui    — disabled; we provide our own button.
 -->
 <a-scene
@@ -429,57 +414,56 @@ AFRAME.registerComponent('deer-vision', {
 
 </a-scene>
 
-<!-- ── Start AR / session management ──────────────────────────────────────── -->
+<!-- ── Session management ──────────────────────────────────────────────────── -->
 <script>
-  const sceneEl  = document.querySelector('a-scene');
-  const startUI  = document.getElementById('start-ui');
-  const startBtn = document.getElementById('startARBtn');
-  const noteEl   = document.getElementById('support-note');
-  const hudEl    = document.getElementById('hud');
+  const sceneEl = document.querySelector('a-scene');
+  const vrBtn   = document.getElementById('vrBtn');
+  const hudEl   = document.getElementById('hud');
 
-  // ── Check WebXR immersive-ar support ─────────────────────────────────────
+  // ── Detect best available immersive mode ──────────────────────────────────
+  // AR (immersive-ar) is preferred because it activates the passthrough cameras.
+  // VR (immersive-vr) is the fallback for headsets without AR passthrough.
+  // On desktop neither is available; the button enters the flat preview.
+  let enterMode = 'flat'; // 'ar' | 'vr' | 'flat'
+
   (async () => {
     if (!navigator.xr) {
-      startBtn.textContent = 'WebXR not available';
-      noteEl.textContent   = 'Open in the Meta Quest Browser or another WebXR-capable browser.';
+      vrBtn.textContent = 'Switch to VR';
+      vrBtn.disabled    = false;
+      enterMode         = 'flat';
       return;
     }
+    const arOk = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
+    const vrOk = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false);
 
-    const arSupported = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
-
-    if (arSupported) {
-      startBtn.textContent = 'Start AR — Deer Vision';
-      startBtn.disabled    = false;
-      noteEl.textContent   = 'Requires Meta Quest 2/3 or another AR-capable device.';
-    } else {
-      // Desktop fallback: enter the scene without AR (vision shader still runs)
-      startBtn.textContent = 'Preview on Desktop';
-      startBtn.disabled    = false;
-      noteEl.textContent   = 'AR not supported here. Deer-vision shader runs in desktop preview mode.';
+    if (arOk) {
+      enterMode         = 'ar';
+    } else if (vrOk) {
+      enterMode         = 'vr';
     }
+    vrBtn.disabled = false;
   })();
 
-  // ── Start button handler ──────────────────────────────────────────────────
-  startBtn.addEventListener('click', async () => {
-    startUI.style.display = 'none';
-    hudEl.style.display   = 'block';
+  // ── Switch to VR — click handler ──────────────────────────────────────────
+  vrBtn.addEventListener('click', () => {
+    vrBtn.classList.add('hidden');
+    hudEl.style.display = 'block';
 
-    if (!navigator.xr) return;
-
-    const arSupported = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
-    if (arSupported) {
-      // enterAR() requests an immersive-ar XR session.
-      // A-Frame handles the session lifecycle; our deer-vision render override
-      // is already active and will apply automatically once XR begins.
+    if (enterMode === 'ar') {
+      // enterAR() requests immersive-ar → Quest 2 passthrough cameras turn on.
+      // Our deer-vision render override applies automatically once XR begins.
       sceneEl.enterAR();
+    } else if (enterMode === 'vr') {
+      // enterVR() requests immersive-vr (standard headset stereo mode).
+      sceneEl.enterVR();
     }
-    // Desktop: scene is already rendering with the deer-vision overlay active.
+    // flat: shader overlay already visible in the browser canvas — no action needed.
   });
 
-  // ── Session exit — return to Start UI ────────────────────────────────────
+  // ── Exit session — restore button ─────────────────────────────────────────
   sceneEl.addEventListener('exit-vr', () => {
-    startUI.style.display = 'flex';
-    hudEl.style.display   = 'none';
+    vrBtn.classList.remove('hidden');
+    hudEl.style.display = 'none';
   });
 </script>
 
